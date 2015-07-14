@@ -1,3 +1,3 @@
-import zk.zk as zk
+from pybase import *
 
-print zk.LocateMeta("localhost")
+a = NewClient("localhost")
