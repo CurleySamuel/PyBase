@@ -6,6 +6,7 @@ logging.basicConfig()
 
 znode = "/hbase"
 
+
 def LocateMeta(zkquorum):
     zk = KazooClient(hosts=zkquorum)
     zk.start()
@@ -19,7 +20,7 @@ def LocateMeta(zkquorum):
     if meta_length < 1 or meta_length > 65000:
         raise Exception
     magic = unpack(">I", rsp[meta_length+5:meta_length+9])[0]
-    if magic != 1346524486:        
+    if magic != 1346524486:
         # 4 bytes: PBUF
         raise Exception
     rsp = rsp[meta_length+9:]

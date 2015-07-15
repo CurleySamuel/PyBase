@@ -1,3 +1,5 @@
-from pybase import *
+import pybase
 
-a = NewClient("localhost")
+a = pybase.NewClient("localhost")
+
+b = a._find_region()
