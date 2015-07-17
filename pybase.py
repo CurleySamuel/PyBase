@@ -1,5 +1,5 @@
-import zk.zk as zk
-import region.region as region
+import zk.client as zk
+import region.client as region
 from pb.HBase_pb2 import RegionInfo
 from pb.Client_pb2 import GetRequest
 from pb.RPC_pb2 import RequestHeader
