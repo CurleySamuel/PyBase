@@ -50,7 +50,7 @@ class Client:
     #   5. The serialized RPC.
     #
     def _send_rpc(self, rpc, request_type):
-        logger.info(
+        logger.debug(
             'Sending %s RPC to %s:%s', request_type, self.host, self.port)
         # Serialize the RPC
         serialized_rpc = rpc.SerializeToString()

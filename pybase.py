@@ -3,14 +3,34 @@ import region.client as region
 from pb.Client_pb2 import GetRequest
 from helpers.helpers import families_to_columns
 import region.region_info as region_info
-import logging
 import sys
+import logging
+import logging.config
+
 logger = logging.getLogger('pybase')
-logger.setLevel(logging.DEBUG)
-handler = logging.StreamHandler(sys.stderr)
-handler.setFormatter(
-    logging.Formatter('%(asctime)s - %(levelname)s - %(name)s - %(message)s'))
-logger.addHandler(handler)
+logging.config.dictConfig({
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'standard': {
+            'format': '%(asctime)s [%(levelname)s] %(name)s: %(message)s'
+        }
+    },
+    'handlers': {
+        'default': {
+            'level': 'INFO',
+            'class': 'logging.StreamHandler',
+            'formatter': 'standard'
+        }
+    },
+    'loggers': {
+        '': {
+            'handlers': ['default'],
+            'level': 'INFO',
+            'propagate': True
+        }
+    }
+})
 
 
 # Table + Family used when requesting meta information from the
