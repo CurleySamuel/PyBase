@@ -3,6 +3,15 @@ import region.client as region
 from pb.Client_pb2 import GetRequest
 from helpers.helpers import families_to_columns
 import region.region_info as region_info
+import logging
+import sys
+logger = logging.getLogger('pybase')
+logger.setLevel(logging.DEBUG)
+handler = logging.StreamHandler(sys.stderr)
+handler.setFormatter(
+    logging.Formatter('%(asctime)s - %(levelname)s - %(name)s - %(message)s'))
+logger.addHandler(handler)
+
 
 # Table + Family used when requesting meta information from the
 # MetaRegionServer
@@ -29,6 +38,8 @@ class MainClient:
         meta_key = self._construct_meta_key(table, key)
         region_client = self._search_cache_for_region(meta_key)
         if region_client is None:
+            logger.info(
+                'Cache miss! Creating new client. Table: %s, Key: %s', table, key)
             region_client = self._discover_region(meta_key)
         return region_client
 

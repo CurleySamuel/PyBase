@@ -2,7 +2,8 @@ from kazoo.client import KazooClient
 from pb.ZooKeeper_pb2 import MetaRegionServer
 from struct import unpack
 import logging
-logging.basicConfig()
+logger = logging.getLogger('pybase.' + __name__)
+logger.setLevel(logging.DEBUG)
 
 znode = "/hbase"
 
@@ -45,5 +46,7 @@ def LocateMeta(zkquorum):
     rsp = rsp[meta_length + 9:]
     meta = MetaRegionServer()
     meta.ParseFromString(rsp)
+    logger.info('Discovered MetaClient at %s:%s',
+                meta.server.host_name, meta.server.port)
     return meta.server.host_name, meta.server.port
 

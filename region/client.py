@@ -3,6 +3,9 @@ from struct import pack, unpack
 from pb.RPC_pb2 import ConnectionHeader, RequestHeader, ResponseHeader
 from pb.Client_pb2 import GetResponse, MutateResponse, ScanResponse
 from helpers import varint
+import logging
+logger = logging.getLogger('pybase.' + __name__)
+logger.setLevel(logging.DEBUG)
 
 
 # Used to encode and decode varints in a format protobuf expects.
@@ -47,6 +50,8 @@ class Client:
     #   5. The serialized RPC.
     #
     def _send_rpc(self, rpc, request_type):
+        logger.info(
+            'Sending %s RPC to %s:%s', request_type, self.host, self.port)
         # Serialize the RPC
         serialized_rpc = rpc.SerializeToString()
 
