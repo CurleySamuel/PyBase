@@ -1,7 +1,7 @@
 import zk.client as zk
 import region.client as region
-from pb.Client_pb2 import GetRequest
-from helpers.helpers import families_to_columns
+from pb.Client_pb2 import GetRequest, MutateRequest
+from helpers.helpers import families_to_columns, values_to_column_values
 import region.region_info as region_info
 import sys
 import logging
@@ -119,39 +119,68 @@ class MainClient:
     def _get_from_region_inf_to_region_client_cache(self, region_name):
         return None
 
-    def get(table, key, families=None, filters=None):
+    def get(self, table, key, families={}, filters=None):
 
         # Step 1. Figure out where to send it.
-
         region_client, region_name = self._find_hosting_region_client(
             table, key)
 
         # Step 2. Build the appropriate pb message.
-
         rq = GetRequest()
         rq.get.row = key
         rq.get.column.extend(families_to_columns(families))
         rq.region.type = 1
         rq.region.value = region_name
 
-        # Step 3. Wait for a response.
+        # Step 3. Send the message and twiddle our thumbs
+        response = region_client._send_rpc(rq, "Get")
 
         # Step 4. Profit
+        return response.result.cell
+
+    def scan(self, table, families={}, filters=None):
+        # Scan is much harder. TODO
         pass
 
-    def scan(table, families=None, filters=None):
+    # All mutate requests (PUT/DELETE/APP/INC) require a values field that looks like:
+    #
+    #   {
+    #      "cf1": {
+    #           "mycol": "hodor",
+    #           "mycol2": "alsohodor"
+    #      },
+    #      "cf2": {
+    #           "mycolumn7": 24
+    #      }
+    #   }
+    #
+    def put(self, table, key, values):
+
+        # Step 1
+        region_client, region_name = self._find_hosting_region_client(
+            table, key)
+
+        # Step 2
+        rq = MutateRequest()
+        rq.region.type = 1
+        rq.region.value = region_name
+        rq.mutation.row = key
+        rq.mutation.mutate_type = 2
+        rq.mutation.column_value.extend(values_to_column_values(values))
+
+        # Step 3
+        response = region_client._send_rpc(rq, "Mutate")
+
+        # Step 4
+        # Do we need to return anything?
+
+    def delete(self, table, key, values):
         pass
 
-    def put(table, key, values):
+    def app(self, table, key, values):
         pass
 
-    def delete(table, key, values):
-        pass
-
-    def app(table, key, values):
-        pass
-
-    def inc(table, key, values):
+    def inc(self, table, key, values):
         pass
 
 
