@@ -1,3 +1,5 @@
+# Test file that uses the client.
+
 import pybase
 
 a = pybase.NewClient("localhost")
