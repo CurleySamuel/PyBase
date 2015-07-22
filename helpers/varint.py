@@ -59,7 +59,7 @@ def _VarintDecoder(mask):
                 return (result, pos)
             shift += 7
             if shift >= 64:
-                raise _DecodeError('Too many bytes when decoding varint.')
+                raise ValueError('Too many bytes when decoding varint.')
 
     return DecodeVarint
 
@@ -87,7 +87,7 @@ def _SignedVarintDecoder(mask):
                 return (result, pos)
             shift += 7
             if shift >= 64:
-                raise _DecodeError('Too many bytes when decoding varint.')
+                raise ValueError('Too many bytes when decoding varint.')
 
     return DecodeVarint
 

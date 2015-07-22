@@ -1,14 +1,9 @@
 import socket
 from struct import pack, unpack
 from pb.RPC_pb2 import ConnectionHeader, RequestHeader, ResponseHeader
-from pb.HBase_pb2 import RegionInfo
-from pb.Client_pb2 import GetRequest, Column, GetResponse, MutateResponse, ScanResponse
+from pb.Client_pb2 import GetResponse, MutateResponse, ScanResponse
 from helpers import varint
 
-# Table + Family used when requesting meta information from the
-# MetaRegionServer
-metaTableName = "hbase:meta,,1"
-metaInfoFamily = {"info": []}
 
 # Used to encode and decode varints in a format protobuf expects.
 encoder = varint.encodeVarint
@@ -22,9 +17,10 @@ response_types = {
     "Scan": ScanResponse
 }
 
-
 # This Client is created once per RegionServer. Handles all communication
 # to and from this specific RegionServer.
+
+
 class Client:
     # Variables are as follows:
     #   - Host: The hostname of the RegionServer
@@ -116,28 +112,6 @@ class Client:
         # The rpc is fully built!
         return rpc
 
-    # Given a table and key, locate the appropriate RegionServer by searching
-    # our cache and then defaulting to asking the MetaClient where it's at.
-    def _find_region_client_by_key(self, table, key):
-        meta_key = self._construct_meta_key(table, key)
-        region_client = self._discover_region(meta_key)
-        return region_client
-
-    # Constructs the string used to query the MetaClient
-    def _construct_meta_key(self, table, key):
-        return table + "," + key + ",:"
-
-    # This function takes a meta_key and queries the MetaClient for the
-    # RegionServer hosting that region.
-    def _discover_region(self, key):
-        rq = GetRequest()
-        rq.get.row = key
-        rq.get.column.extend(_families_to_columns(metaInfoFamily))
-        rq.get.closest_row_before = True
-        rq.region.type = 1
-        rq.region.value = metaTableName
-        rsp = self._send_rpc(rq, "Get")
-
     # Receives exactly n bytes from the socket. Will block until n bytes are
     # received.
     def _recv_n(self, n):
@@ -172,28 +146,6 @@ def _send_hello(sock):
     #   3. Serialized ConnectionHeader
     message = "HBas\x00\x50" + pack(">I", len(serialized)) + serialized
     sock.send(message)
-
-
-#  Converts a dictionary specifying ColumnFamilys -> Qualifiers into the protobuf type.
-#
-#    Families should look like
-#    {
-#        "columnFamily1": [
-#            "qual1",
-#            "qual2"
-#        ],
-#        "columnFamily2": [
-#            "qual3"
-#        ]
-#    }
-def _families_to_columns(fam):
-    cols = []
-    for key in fam.keys():
-        c = Column()
-        c.family = key
-        c.qualifier.extend(fam[key])
-        cols.append(c)
-    return cols
 
 
 # Little helper function that will return a byte-string representing the
