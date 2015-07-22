@@ -175,13 +175,62 @@ class MainClient:
         # Do we need to return anything?
 
     def delete(self, table, key, values):
-        pass
+        # Step 1
+        region_client, region_name = self._find_hosting_region_client(
+            table, key)
+
+        # Step 2
+        rq = MutateRequest()
+        rq.region.type = 1
+        rq.region.value = region_name
+        rq.mutation.row = key
+        rq.mutation.mutate_type = 3
+        rq.mutation.column_value.extend(
+            values_to_column_values(values, delete=True))
+
+        # Step 3
+        response = region_client._send_rpc(rq, "Mutate")
+
+        # Step 4
+        # Do we need to return anything?
 
     def app(self, table, key, values):
-        pass
+        # Step 1
+        region_client, region_name = self._find_hosting_region_client(
+            table, key)
+
+        # Step 2
+        rq = MutateRequest()
+        rq.region.type = 1
+        rq.region.value = region_name
+        rq.mutation.row = key
+        rq.mutation.mutate_type = 0
+        rq.mutation.column_value.extend(values_to_column_values(values))
+
+        # Step 3
+        response = region_client._send_rpc(rq, "Mutate")
+
+        # Step 4
+        # Do we need to return anything?
 
     def inc(self, table, key, values):
-        pass
+        # Step 1
+        region_client, region_name = self._find_hosting_region_client(
+            table, key)
+
+        # Step 2
+        rq = MutateRequest()
+        rq.region.type = 1
+        rq.region.value = region_name
+        rq.mutation.row = key
+        rq.mutation.mutate_type = 1
+        rq.mutation.column_value.extend(values_to_column_values(values))
+
+        # Step 3
+        response = region_client._send_rpc(rq, "Mutate")
+
+        # Step 4
+        # Do we need to return anything?
 
 
 # Entrypoint into the whole system. Given a string representing the
