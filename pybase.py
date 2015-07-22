@@ -1,6 +1,8 @@
 import zk.client as zk
 import region.client as region
-from pb.Client_pb2 import GetRequest, Column
+from pb.Client_pb2 import GetRequest
+from helpers.helpers import families_to_columns
+import region.region_info as region_info
 
 # Table + Family used when requesting meta information from the
 # MetaRegionServer
@@ -25,7 +27,9 @@ class MainClient:
     # our cache and then defaulting to asking the MetaClient where it's at.
     def _find_region_client_by_key(self, table, key):
         meta_key = self._construct_meta_key(table, key)
-        region_client = self._discover_region(meta_key)
+        region_client = self._search_cache_for_region(meta_key)
+        if region_client is None:
+            region_client = self._discover_region(meta_key)
         return region_client
 
     # Constructs the string used to query the MetaClient
@@ -34,15 +38,41 @@ class MainClient:
 
     # This function takes a meta_key and queries the MetaClient for the
     # RegionServer hosting that region.
-    def _discover_region(self, key):
+    def _discover_region(self, meta_key):
         rq = GetRequest()
-        rq.get.row = key
-        rq.get.column.extend(_families_to_columns(metaInfoFamily))
+        rq.get.row = meta_key
+        rq.get.column.extend(families_to_columns(metaInfoFamily))
         rq.get.closest_row_before = True
         rq.region.type = 1
         rq.region.value = metaTableName
         rsp = self.meta_client._send_rpc(rq, "Get")
-        return rsp
+        return self._create_new_region(rsp)
+
+    # This function takes the result of a MetaQuery and parses it to create the
+    # corresponding region client.
+    def _create_new_region(self, rsp):
+        for cell in rsp.result.cell:
+            if cell.qualifier == "regioninfo":
+                region_inf = region_info.region_info_from_cell(cell)
+            elif cell.qualifier == "server":
+                value = cell.value.split(':')
+                host = value[0]
+                port = int(value[1])
+            else:
+                continue
+        new_client = region.NewClient(host, port)
+        return self._add_region_to_cache(region_inf, new_client)
+
+    # Given a recently created region client and it's respective information,
+    # store it in our caches so future requests for the same region don't get
+    # a cache miss as well.
+    def _add_region_to_cache(self, region_inf, new_client):
+        return new_client
+
+    # Given a meta_key, return the region client serving that region or return
+    # None if no region clients are serving that region
+    def _search_cache_for_region(self, meta_key):
+        return None
 
 
 # Entrypoint into the whole system. Given a string representing the
@@ -53,26 +83,4 @@ def NewClient(zkquorum):
     ip, port = zk.LocateMeta(zkquorum)
     meta_client = region.NewClient(ip, port)
     return MainClient(zkquorum, meta_client)
-
-
-#  Converts a dictionary specifying ColumnFamilys -> Qualifiers into the protobuf type.
-#
-#    Families should look like
-#    {
-#        "columnFamily1": [
-#            "qual1",
-#            "qual2"
-#        ],
-#        "columnFamily2": [
-#            "qual3"
-#        ]
-#    }
-def _families_to_columns(fam):
-    cols = []
-    for key in fam.keys():
-        c = Column()
-        c.family = key
-        c.qualifier.extend(fam[key])
-        cols.append(c)
-    return cols
 
