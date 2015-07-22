@@ -3,8 +3,8 @@
 import pybase
 
 a = pybase.NewClient("localhost")
-b = a._find_region_client_by_key("test", "20")
-c = a._find_region_client_by_key("test", "20")
+b = a._find_hosting_region_client("test", "20")
+c = a._find_hosting_region_client("test", "22")
 
 print b, c
 

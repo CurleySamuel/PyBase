@@ -52,16 +52,25 @@ class MainClient:
         self.zkquorum = zkquorum
         self.meta_client = client
 
-    # Given a table and key, locate the appropriate RegionServer by searching
-    # our cache and then defaulting to asking the MetaClient where it's at.
-    def _find_region_client_by_key(self, table, key):
+    def _find_hosting_region_client(self, table, key):
         meta_key = self._construct_meta_key(table, key)
-        region_client = self._search_cache_for_region(meta_key)
+        region_name = self._get_from_meta_key_to_region_name_cache(meta_key)
+        if region_name is None:
+            # We couldn't find the region in our cache.
+            logger.info('Region cache miss! Table: %s, Key: %s', table, key)
+            return self._discover_region(meta_key)
+        region_client = self._get_from_region_name_to_region_client_cache(
+            region_name)
         if region_client is None:
-            logger.info(
-                'Cache miss! Creating new client. Table: %s, Key: %s', table, key)
-            region_client = self._discover_region(meta_key)
-        return region_client
+            logger.warn('Client cache miss! region_name: %s', region_name)
+            # This should very rarely happen. When a region is discovered it's paired with
+            # a RegionClient instance. If we have knowledge of the region but
+            # not the RegionClient hosting it then that's pretty bad.
+            #
+            # TODO: We need to handle this properly but for now just
+            # re-discover the whole region.
+            return self._discover_region(meta_key)
+        return region_client, region_name
 
     # Constructs the string used to query the MetaClient
     def _construct_meta_key(self, table, key):
@@ -79,8 +88,8 @@ class MainClient:
         rsp = self.meta_client._send_rpc(rq, "Get")
         return self._create_new_region(rsp)
 
-    # This function takes the result of a MetaQuery and parses it to create the
-    # corresponding region client.
+    # This function takes the result of a MetaQuery, parses it, creates a new
+    # RegionClient if necessary then insert into both caches.
     def _create_new_region(self, rsp):
         for cell in rsp.result.cell:
             if cell.qualifier == "regioninfo":
@@ -91,19 +100,59 @@ class MainClient:
                 port = int(value[1])
             else:
                 continue
-        new_client = region.NewClient(host, port)
-        return self._add_region_to_cache(region_inf, new_client)
+        client = self._get_from_region_inf_to_region_client_cache(region_inf)
+        if client is None:
+            client = region.NewClient(host, port)
+        self._add_to_meta_key_to_region_name_cache(region_inf)
+        self._add_to_region_inf_to_region_client_cache(region_inf, client)
+        return client, region_inf.region_name
 
-    # Given a recently created region client and it's respective information,
-    # store it in our caches so future requests for the same region don't get
-    # a cache miss as well.
-    def _add_region_to_cache(self, region_inf, new_client):
-        return new_client
-
-    # Given a meta_key, return the region client serving that region or return
-    # None if no region clients are serving that region
-    def _search_cache_for_region(self, meta_key):
+    def _add_to_meta_key_to_region_name_cache(self, region_inf):
         return None
+
+    def _get_from_meta_key_to_region_name_cache(self, meta_key):
+        return None
+
+    def _add_to_region_inf_to_region_client_cache(self, region_inf, region_client):
+        return None
+
+    def _get_from_region_inf_to_region_client_cache(self, region_name):
+        return None
+
+    def get(table, key, families=None, filters=None):
+
+        # Step 1. Figure out where to send it.
+
+        region_client, region_name = self._find_hosting_region_client(
+            table, key)
+
+        # Step 2. Build the appropriate pb message.
+
+        rq = GetRequest()
+        rq.get.row = key
+        rq.get.column.extend(families_to_columns(families))
+        rq.region.type = 1
+        rq.region.value = region_name
+
+        # Step 3. Wait for a response.
+
+        # Step 4. Profit
+        pass
+
+    def scan(table, families=None, filters=None):
+        pass
+
+    def put(table, key, values):
+        pass
+
+    def delete(table, key, values):
+        pass
+
+    def app(table, key, values):
+        pass
+
+    def inc(table, key, values):
+        pass
 
 
 # Entrypoint into the whole system. Given a string representing the
