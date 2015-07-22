@@ -5,6 +5,9 @@ from pb.Client_pb2 import GetRequest
 from pb.RPC_pb2 import RequestHeader
 from struct import pack
 
+# This class represents the main Client that will be created by the user.
+# All HBase interaction goes through this client.
+
 
 class MainClient:
 

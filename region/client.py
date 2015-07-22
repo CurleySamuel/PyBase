@@ -1,11 +1,20 @@
 import socket
 from struct import pack, unpack
-from pb.RPC_pb2 import ConnectionHeader, RequestHeader
+from pb.RPC_pb2 import ConnectionHeader, RequestHeader, ResponseHeader
 from pb.HBase_pb2 import RegionInfo
-from pb.Client_pb2 import GetRequest, Column
+from pb.Client_pb2 import GetRequest, Column, GetResponse, MutateResponse, ScanResponse
+from helpers import varint
 
 metaTableName = "hbase:meta,,1"
 metaInfoFamily = {"info": []}
+encoder = varint.encodeVarint
+decoder = varint.decodeVarint
+
+response_types = {
+    "Get": GetResponse,
+    "Mutate": MutateResponse,
+    "Scan": ScanResponse
+}
 
 
 class Client:
@@ -24,16 +33,35 @@ class Client:
         header.request_param = True
         serialized_header = header.SerializeToString()
 
-        rpc_length_bytes = _encode_varint(len(serialized_rpc))
+        rpc_length_bytes = _to_varint(len(serialized_rpc))
         total_length = 4 + 1 + \
             len(serialized_header) + \
             len(rpc_length_bytes) + len(serialized_rpc)
         to_send = pack(">IB", total_length - 4, len(serialized_header))
         to_send += serialized_header + rpc_length_bytes + serialized_rpc
 
-        self.sock.send(to_send)
-        print self.sock.recv(4096)
         self.call_id += 1
+        self.sock.send(to_send)
+        return self._receive_rpc(self.call_id - 1, request_type)
+
+    def _receive_rpc(self, call_id, request_type):
+        msg_length = self._recv_n(4)
+        if msg_length is None:
+            return 1 / 0  # TODO
+        msg_length = unpack(">I", msg_length)[0]
+        full_data = self._recv_n(msg_length)
+        next_pos, pos = decoder(full_data, 0)
+        header = ResponseHeader()
+        header.ParseFromString(full_data[pos: pos + next_pos])
+        pos += next_pos
+        if header.call_id != call_id:
+            return 1 / 0  # TODO
+        elif header.exception.exception_class_name != u'':
+            return 1 / 0  # TODO
+        next_pos, pos = decoder(full_data, pos)
+        rpc = response_types[request_type]()
+        rpc.ParseFromString(full_data[pos: pos + next_pos])
+        return rpc
 
     def _find_region_by_key(self, table, key):
         meta_key = self._construct_meta_key(table, key)
@@ -52,6 +80,15 @@ class Client:
         rq.region.value = metaTableName
         rsp = self._send_rpc(rq, "Get")
 
+    def _recv_n(self, n):
+        data = ''
+        while len(data) < n:
+            packet = self.sock.recv(n - len(data))
+            if not packet:
+                return None
+            data += packet
+        return data
+
 
 def NewClient(host, port):
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -69,6 +106,8 @@ def _send_hello(sock):
     sock.send(message)
 
 
+#  Converts a dictionary specifying ColumnFamilys -> Qualifiers into the protobuf type.
+#
 #    Families should look like
 #    {
 #        "columnFamily1": [
@@ -89,34 +128,8 @@ def _families_to_columns(fam):
     return cols
 
 
-# varint functions were pulled from the below URL. Don't put too much faith in them.
-# https://github.com/remoun/python-protobuf/blob/master/google/protobuf/internal/encoder.py
-def _encode_varint(value):
-    pieces = []
-    write = pieces.append
-    bits = value & 0x7f
-    value >>= 7
-    while value:
-        write(chr(0x80 | bits))
-        bits = value & 0x7f
-        value >>= 7
-    write(chr(bits))
-    return "".join(pieces)
-
-
-# I made some personal modifications to _decode_varint. It seems to work
-# but may fail with edge-case testing
-def _decode_varint(value):
-    pos = 0
-    result = 0
-    shift = 0
-    while 1:
-        b = ord(value[pos])
-        result |= ((b & 0x7f) << shift)
-        pos += 1
-        if not (b & 0x80):
-            return result
-        shift += 7
-        if shift >= 64:
-            raise ValueError("Too many bytes while decoding")
+def _to_varint(val):
+    temp = []
+    encoder(temp.append, val)
+    return "".join(temp)
 
