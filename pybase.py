@@ -7,6 +7,7 @@ import sys
 import logging
 import logging.config
 from intervaltree import Interval, IntervalTree
+from collections import defaultdict
 
 logger = logging.getLogger('pybase')
 logging.config.dictConfig({
@@ -54,6 +55,7 @@ class MainClient:
         self.meta_client = client
         self.region_inf_cache = IntervalTree()
         self.region_client_cache = {}
+        self.region_client_references = defaultdict(int)
 
     def _find_hosting_region_client(self, table, key):
         meta_key = self._construct_meta_key(table, key)
@@ -125,7 +127,10 @@ class MainClient:
         stop_key = region_inf.table + ',' + stop_key
         # We remove any intervals that overlap with our new range (they're
         # stale data and will cause a HBase region not served error as there
-        # was a split)
+        # was a split). Before we remove them we want to grab them so we can
+        # remove stale data from the other cache.
+        old_regions = self.region_inf_cache[start_key:stop_key]
+        self._purge_old_region_clients(old_regions)
         self.region_inf_cache.remove_overlap(start_key, stop_key)
         self.region_inf_cache[start_key:stop_key] = region_inf
 
@@ -139,14 +144,27 @@ class MainClient:
 
     def _add_to_region_name_to_region_client_cache(self, region_name, region_client):
         self.region_client_cache[region_name] = region_client
+        self.region_client_references[region_name] += 1
 
     def _get_from_region_name_to_region_client_cache(self, region_name):
         if region_name not in self.region_client_cache:
             return None
         return self.region_client_cache[region_name]
 
-    def get(self, table, key, families={}, filters=None):
+    def _purge_old_region_clients(self, old):
+        for interval in old:
+            region_name = interval.data.region_name
+            client = self.region_client_cache.pop(region_name, None)
+            if client is not None:
+                # We need to keep track of how many regions references this client
+                # to know whether or not we can safely kill the client.
+                if self.region_client_references[region_name] == 1:
+                    client.close()
+                    self.region_client_references.pop(region_name, None)
+                else:
+                    self.region_client_references[region_name] -= 1
 
+    def get(self, table, key, families={}, filters=None):
         # Step 1. Figure out where to send it.
         region_client, region_name = self._find_hosting_region_client(
             table, key)
@@ -181,7 +199,6 @@ class MainClient:
     #   }
     #
     def put(self, table, key, values):
-
         # Step 1
         region_client, region_name = self._find_hosting_region_client(
             table, key)

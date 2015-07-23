@@ -132,6 +132,12 @@ class Client:
             data += packet
         return data
 
+    # Do any work to close open file descriptors, etc. When I convert the code
+    # to become asynchronous + multithreaded this function gets very hairy
+    # very quickly.
+    def close(self):
+        self.sock.close()
+
 
 # Creates a new RegionServer client. Creates the socket, initializes the
 # connection and returns an instance of Client.
