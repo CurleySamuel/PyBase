@@ -6,6 +6,7 @@ import region.region_info as region_info
 import sys
 import logging
 import logging.config
+from intervaltree import Interval, IntervalTree
 
 logger = logging.getLogger('pybase')
 logging.config.dictConfig({
@@ -51,14 +52,17 @@ class MainClient:
     def __init__(self, zkquorum, client):
         self.zkquorum = zkquorum
         self.meta_client = client
+        self.region_inf_cache = IntervalTree()
+        self.region_client_cache = {}
 
     def _find_hosting_region_client(self, table, key):
         meta_key = self._construct_meta_key(table, key)
-        region_name = self._get_from_meta_key_to_region_name_cache(meta_key)
-        if region_name is None:
+        region_inf = self._get_from_meta_key_to_region_inf_cache(meta_key)
+        if region_inf is None:
             # We couldn't find the region in our cache.
             logger.info('Region cache miss! Table: %s, Key: %s', table, key)
             return self._discover_region(meta_key)
+        region_name = region_inf.region_name
         region_client = self._get_from_region_name_to_region_client_cache(
             region_name)
         if region_client is None:
@@ -100,24 +104,46 @@ class MainClient:
                 port = int(value[1])
             else:
                 continue
-        client = self._get_from_region_inf_to_region_client_cache(region_inf)
+        client = self._get_from_region_name_to_region_client_cache(
+            region_inf.region_name)
         if client is None:
             client = region.NewClient(host, port)
-        self._add_to_meta_key_to_region_name_cache(region_inf)
-        self._add_to_region_inf_to_region_client_cache(region_inf, client)
+        self._add_to_meta_key_to_region_inf_cache(region_inf)
+        self._add_to_region_name_to_region_client_cache(
+            region_inf.region_name, client)
         return client, region_inf.region_name
 
-    def _add_to_meta_key_to_region_name_cache(self, region_inf):
-        return None
+    def _add_to_meta_key_to_region_inf_cache(self, region_inf):
+        stop_key = region_inf.stop_key
+        if stop_key == '':
+            # This is hacky but our interval tree requires hard interval stops.
+            # So what's the largest char out there? chr(255) -> '\xff'. If
+            # you're using '\xff' as a prefix for your rows then this'll cause
+            # a cache miss on every request.
+            stop_key = '\xff'
+        start_key = region_inf.table + ',' + region_inf.start_key
+        stop_key = region_inf.table + ',' + stop_key
+        # We remove any intervals that overlap with our new range (they're
+        # stale data and will cause a HBase region not served error as there
+        # was a split)
+        self.region_inf_cache.remove_overlap(start_key, stop_key)
+        self.region_inf_cache[start_key:stop_key] = region_inf
 
-    def _get_from_meta_key_to_region_name_cache(self, meta_key):
-        return None
+    def _get_from_meta_key_to_region_inf_cache(self, meta_key):
+        # We don't care about the last two characters ',:' in the meta_key.
+        meta_key = meta_key[:-2]
+        regions = self.region_inf_cache[meta_key]
+        if len(regions) == 0:
+            return None
+        return regions.pop().data
 
-    def _add_to_region_inf_to_region_client_cache(self, region_inf, region_client):
-        return None
+    def _add_to_region_name_to_region_client_cache(self, region_name, region_client):
+        self.region_client_cache[region_name] = region_client
 
-    def _get_from_region_inf_to_region_client_cache(self, region_name):
-        return None
+    def _get_from_region_name_to_region_client_cache(self, region_name):
+        if region_name not in self.region_client_cache:
+            return None
+        return self.region_client_cache[region_name]
 
     def get(self, table, key, families={}, filters=None):
 
