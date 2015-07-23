@@ -1,6 +1,6 @@
 import zk.client as zk
 import region.client as region
-from pb.Client_pb2 import GetRequest, MutateRequest
+from pb.Client_pb2 import GetRequest, MutateRequest, ScanRequest
 from helpers.helpers import families_to_columns, values_to_column_values
 import region.region_info as region_info
 import sys
@@ -8,6 +8,7 @@ import logging
 import logging.config
 from intervaltree import Interval, IntervalTree
 from collections import defaultdict
+from itertools import chain
 
 logger = logging.getLogger('pybase')
 logging.config.dictConfig({
@@ -57,13 +58,13 @@ class MainClient:
         self.region_client_cache = {}
         self.region_client_references = defaultdict(int)
 
-    def _find_hosting_region_client(self, table, key):
+    def _find_hosting_region_client(self, table, key, return_stop=False):
         meta_key = self._construct_meta_key(table, key)
         region_inf = self._get_from_meta_key_to_region_inf_cache(meta_key)
         if region_inf is None:
             # We couldn't find the region in our cache.
             logger.info('Region cache miss! Table: %s, Key: %s', table, key)
-            return self._discover_region(meta_key)
+            return self._discover_region(meta_key, return_stop)
         region_name = region_inf.region_name
         region_client = self._get_from_region_name_to_region_client_cache(
             region_name)
@@ -75,7 +76,9 @@ class MainClient:
             #
             # TODO: We need to handle this properly but for now just
             # re-discover the whole region.
-            return self._discover_region(meta_key)
+            return self._discover_region(meta_key, return_stop)
+        if return_stop:
+            return region_client, region_name, region_inf.stop_key
         return region_client, region_name
 
     # Constructs the string used to query the MetaClient
@@ -84,7 +87,7 @@ class MainClient:
 
     # This function takes a meta_key and queries the MetaClient for the
     # RegionServer hosting that region.
-    def _discover_region(self, meta_key):
+    def _discover_region(self, meta_key, return_stop):
         rq = GetRequest()
         rq.get.row = meta_key
         rq.get.column.extend(families_to_columns(metaInfoFamily))
@@ -92,7 +95,10 @@ class MainClient:
         rq.region.type = 1
         rq.region.value = metaTableName
         rsp = self.meta_client._send_rpc(rq, "Get")
-        return self._create_new_region(rsp)
+        client, region_inf = self._create_new_region(rsp)
+        if return_stop:
+            return client, region_inf.region_name, region_inf.stop_key
+        return client, region_inf.region_name
 
     # This function takes the result of a MetaQuery, parses it, creates a new
     # RegionClient if necessary then insert into both caches.
@@ -113,7 +119,7 @@ class MainClient:
         self._add_to_meta_key_to_region_inf_cache(region_inf)
         self._add_to_region_name_to_region_client_cache(
             region_inf.region_name, client)
-        return client, region_inf.region_name
+        return client, region_inf
 
     def _add_to_meta_key_to_region_inf_cache(self, region_inf):
         stop_key = region_inf.stop_key
@@ -144,7 +150,7 @@ class MainClient:
 
     def _add_to_region_name_to_region_client_cache(self, region_name, region_client):
         self.region_client_cache[region_name] = region_client
-        self.region_client_references[region_name] += 1
+        self.region_client_references[region_client] += 1
 
     def _get_from_region_name_to_region_client_cache(self, region_name):
         if region_name not in self.region_client_cache:
@@ -158,11 +164,11 @@ class MainClient:
             if client is not None:
                 # We need to keep track of how many regions references this client
                 # to know whether or not we can safely kill the client.
-                if self.region_client_references[region_name] == 1:
+                if self.region_client_references[client] == 1:
                     client.close()
-                    self.region_client_references.pop(region_name, None)
+                    self.region_client_references.pop(client, None)
                 else:
-                    self.region_client_references[region_name] -= 1
+                    self.region_client_references[client] -= 1
 
     def get(self, table, key, families={}, filters=None):
         # Step 1. Figure out where to send it.
@@ -182,9 +188,66 @@ class MainClient:
         # Step 4. Profit
         return response.result.cell
 
-    def scan(self, table, families={}, filters=None):
-        # Scan is much harder. TODO
-        pass
+    def scan(self, table, start_key=None, stop_key=None, families={}, filters=None):
+        # Using chain.from_iterable because it's the fastest way to flatten a
+        # list of lists.
+        return list(chain.from_iterable(
+            self._scan_helper(
+                table, start_key, stop_key, families, filters, None)
+        ))
+
+    def _scan_helper(self, table, start_key, stop_key, families, filters, scanner_id):
+        cells_to_return = []
+        region_client, rq, region_stop_key = self._scan_build_object(
+            table, start_key, stop_key, families, filters, None, False)
+        response = region_client._send_rpc(rq, "Scan")
+        cells_to_return.extend([result.cell for result in response.results])
+        while response.more_results_in_region:
+            # Keep scanning using the scanner_id and append cells until no more
+            # results in region
+            region_client, rq, region_stop_key = self._scan_build_object(
+                table, start_key, None, None, None, response.scanner_id, False)
+            response = region_client._send_rpc(rq, "Scan")
+            cells_to_return.extend(
+                [result.cell for result in response.results])
+
+        # Now close this region's scanner
+        region_client, rq, region_stop_key = self._scan_build_object(
+            table, start_key, None, None, None, response.scanner_id, True)
+        response = region_client._send_rpc(rq, "Scan")
+
+        # Should we move on to the next region?
+        if region_stop_key == '' or (stop_key is not None and region_stop_key > stop_key):
+            return cells_to_return
+        # Recursively keep scanning the next region.
+        # WARNING - Maximum recursion depth is 998. If we're scanning more than
+        # 998 regions then we'll get a stack overflow. TODO: Don't use
+        # recursion.
+        return cells_to_return.extend(
+            self._scan_helper(
+                table, region_stop_key, stop_key, families, filters, None)
+        )
+
+    def _scan_build_object(self, table, start_key, stop_key, families, filters, scanner_id, close):
+        region_client, region_name, region_stop_key = self._find_hosting_region_client(
+            table, start_key or '', return_stop=True)
+        rq = ScanRequest()
+        rq.region.type = 1
+        rq.region.value = region_name
+        rq.number_of_rows = 50  # TODO: configurable
+        if close:
+            rq.close_scanner = close
+        if scanner_id is not None:
+            rq.scanner_id = scanner_id
+            return region_client, rq, region_stop_key
+
+        rq.scan.column.extend(families_to_columns(families))
+        rq.scan.start_row = start_key or ''
+        if stop_key is not None:
+            rq.scan.stop_row = stop_key
+        if filters is not None:
+            rq.scan.filter = filters
+        return region_client, rq, region_stop_key
 
     # All mutate requests (PUT/DELETE/APP/INC) require a values field that looks like:
     #

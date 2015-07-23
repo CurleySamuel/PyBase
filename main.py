@@ -16,3 +16,6 @@ a.put("test", "20", {"cf": {"a": "New Value!"}})
 a.delete("test", "99", {"cf": {"a": "does it matter what I put here?"}})
 a.app("test", "20", {"cf": {"a": "hello I am dog"}})
 
+d = a.scan("test")
+print "Scan returned {} elements!".format(len(d))
+
