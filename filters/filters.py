@@ -1,0 +1,459 @@
+import pb.Filter_pb2 as pbFilter
+import pb.Comparator_pb2 as pbComparator
+from pb.HBase_pb2 import BytesBytesPair as pbBytesBytesPair
+
+filter_path = "org.apache.hadoop.hbase.filter."
+comparator_path = "org.apache.hadoop.hbase.filter."
+
+# Operators
+MUST_PASS_ONE = 0
+MUST_PASS_ALL = 1
+
+# BitwiseOps
+AND = 1
+OR = 2
+XOR = 3
+
+# CompareTypes
+LESS = 0
+LESS_OR_EQUAL = 1
+EQUAL = 2
+NOT_EQUAL = 3
+GREATER_OR_EQUAL = 4
+GREATER = 5
+NO_OP = 6
+
+class FilterList:
+
+    def __init__(self, operator, filters):
+        self.filter_type = pbFilter.FilterList
+        self.name = filter_path + "FilterList"
+        self.operator = operator
+        self.filters = []
+        try:
+            for incoming_filter in filters:
+                self.filters.append(_to_filter(incoming_filter))
+        except TypeError:
+            # They passed a single filter and not a sequence of filters.
+            self.filters.append(_to_filter(filters))
+
+    def add_filter(self, new_filter):
+        self.filters.append(_to_filter(new_filter))
+
+
+class ColumnCountGetFilter:
+
+    def __init__(self, limit):
+        self.filter_type = pbFilter.ColumnCountGetFilter
+        self.name = filter_path + "ColumnCountGetFilter"
+        self.limit = limit
+
+
+class ColumnPaginationFilter:
+
+    def __init__(self, limit, offset, column_offset):
+        self.filter_type = pbFilter.ColumnPaginationFilter
+        self.name = filter_path + "ColumnPaginationFilter"
+        self.limit = limit
+        self.offset = offset
+        self.column_offset = column_offset
+
+
+class ColumnPrefixFilter:
+
+    def __init__(self, prefix):
+        self.filter_type = pbFilter.ColumnPrefixFilter
+        self.name = filter_path + "ColumnPrefixFilter"
+        self.prefix = prefix
+
+
+class ColumnRangeFilter:
+
+    def __init__(self, min_column, min_column_inclusive, max_column, max_column_inclusive):
+        self.filter_type = pbFilter.ColumnRangeFilter
+        self.name = filter_path + "ColumnRangeFilter"
+        self.min_column = min_column
+        self.min_column_inclusive = min_column_inclusive
+        self.max_column = max_column
+        self.max_column_inclusive = max_column_inclusive
+
+
+class CompareFilter:
+
+    def __init__(self, compare_op, comparator):
+        self.filter_type = pbFilter.CompareFilter
+        self.name = filter_path + "CompareFilter"
+        self.compare_op = compare_op
+        self.comparator = _to_comparator(comparator)
+
+
+class DependentColumnFilter:
+
+    def __init__(self, compare_filter, column_family, column_qualifier, drop_dependent_column):
+        self.filter_type = pbFilter.DependentColumnFilter
+        self.name = filter_path + "DependentColumnFilter"
+        self.compare_filter = _to_filter(compare_filter)
+        self.column_family = column_family
+        self.column_qualifier = column_qualifier
+        self.drop_dependent_column = drop_dependent_column
+
+
+class FamilyFilter:
+
+    def __init__(self, compare_filter):
+        self.filter_type = pbFilter.FamilyFilter
+        self.name = filter_path + "FamilyFilter"
+        self.compare_filter = _to_filter(compare_filter)
+
+
+class FamilyFilter:
+
+    def __init__(self, compare_filter):
+        self.filter_type = pbFilter.FamilyFilter
+        self.name = filter_path + "FamilyFilter"
+        self.compare_filter = _to_filter(compare_filter)
+
+
+class FilterWrapper:
+
+    def __init__(self, new_filter):
+        self.filter_type = pbFilter.FilterWrapper
+        self.name = filter_path + "FilterWrapper"
+        self.filter = _to_filter(new_filter)
+
+class FirstKeyOnlyFilter:
+
+    def __init__(self):
+        self.filter_type = pbFilter.FirstKeyOnlyFilter
+        self.name = filter_path + "FirstKeyOnlyFilter"
+
+
+class FirstKeyValueMatchingQualifiersFilter:
+
+    def __init__(self, qualifiers):
+        self.filter_type = pbFilter.FirstKeyValueMatchingQualifiersFilter
+        self.name = filter_path + "FirstKeyValueMatchingQualifiersFilter"
+        self.qualifiers = qualifiers
+
+
+
+class FuzzyRowFilter:
+
+    def __init__(self, fuzzy_keys_data):
+        self.filter_type = pbFilter.FuzzyRowFilter
+        self.name = filter_path + "FuzzyRowFilter"
+        self.fuzzy_keys_data = []
+        try:
+            for fuzz in fuzzy_keys_data:
+                self.fuzzy_keys_data.append(_to_bytes_bytes_pair(fuzz))
+        except TypeError:
+            # They passed a single element and not a sequence of elements.
+            self.fuzzy_keys_data.append(_to_bytes_bytes_pair(fuzzy_keys_data))
+
+
+class InclusiveStopFilter:
+
+    def __init__(self, stop_row_key):
+        self.filter_type = pbFilter.InclusiveStopFilter
+        self.name = filter_path + "InclusiveStopFilter"
+        self.stop_row_key = stop_row_key
+
+
+class KeyOnlyFilter:
+
+    def __init__(self, len_as_val):
+        self.filter_type = pbFilter.KeyOnlyFilter
+        self.name = filter_path + "KeyOnlyFilter"
+        self.len_as_val = len_as_val
+
+
+class MultipleColumnPrefixFilter:
+
+    def __init__(self, sorted_prefixes):
+        self.filter_type = pbFilter.MultipleColumnPrefixFilter
+        self.name = filter_path + "MultipleColumnPrefixFilter"
+        if isinstance(sorted_prefixes, list):
+            self.sorted_prefixes = sorted_prefixes
+        else:
+            self.sorted_prefixes = [sorted_prefixes]
+
+
+class PageFilter:
+
+    def __init__(self, page_size):
+        self.filter_type = pbFilter.PageFilter
+        self.name = filter_path + "PageFilter"
+        self.page_size = page_size
+
+
+class PrefixFilter:
+
+    def __init__(self, prefix):
+        self.filter_type = pbFilter.PrefixFilter
+        self.name = filter_path + "PrefixFilter"
+        self.prefix = prefix
+
+class QualifierFilter:
+
+    def __init__(self, compare_filter):
+        self.filter_type = pbFilter.QualifierFilter
+        self.name = filter_path + "QualifierFilter"
+        self.compare_filter = _to_filter(compare_filter)
+
+
+class RandomRowFilter:
+
+    def __init__(self, chance):
+        self.filter_type = pbFilter.RandomRowFilter
+        self.name = filter_path + "RandomRowFilter"
+        self.chance = chance
+
+
+class RowFilter:
+
+    def __init__(self, compare_filter):
+        self.filter_type = pbFilter.RowFilter
+        self.name = filter_path + "RowFilter"
+        self.compare_filter = _to_filter(compare_filter)
+
+
+
+class SkipColumnValueExcludeFilter:
+
+    def __init__(self, single_column_value_filter):
+        self.filter_type = pbFilter.SkipColumnValueExcludeFilter
+        self.name = filter_path + "SkipColumnValueExcludeFilter"
+        self.single_column_value_filter = _to_filter(single_column_value_filter)
+
+
+
+
+class SkipColumnValueFilter:
+
+    def __init__(self, compare_op, comparator, column_family, column_qualifier, filter_if_missing, latest_version_only):
+        self.filter_type = pbFilter.SkipColumnValueFilter
+        self.name = filter_path + "SkipColumnValueFilter"
+        self.compare_op = compare_op
+        self.comparator = _to_comparator(comparator)
+        self.column_family = column_family
+        self.column_qualifier = column_qualifier
+        self.filter_if_missing = filter_if_missing
+        self.latest_version_only = latest_version_only
+
+
+class SkipFilter:
+
+    def __init__(self, orig_filter):
+        self.filter_type = pbFilter.SkipFilter
+        self.name = filter_path + "SkipFilter"
+        self.filter = orig_filter
+
+
+class TimestampsFilter:
+
+    def __init__(self, timestamps):
+        self.filter_type = pbFilter.TimestampsFilter
+        self.name = filter_path + "TimestampsFilter"
+        if isinstance(timestamps, list):
+            self.timestamps = timestamps
+        else:
+            self.timestamps = [timestamps]
+
+
+
+class ValueFilter:
+
+    def __init__(self, compare_filter):
+        self.filter_type = pbFilter.ValueFilter
+        self.name = filter_path + "ValueFilter"
+        self.compare_filter = _to_filter(compare_filter)
+
+
+class WhileMatchFilter:
+
+    def __init__(self, origFilter):
+        self.filter_type = pbFilter.WhileMatchFilter
+        self.name = filter_path + "WhileMatchFilter"
+        self.filter = _to_filter(origFilter)
+
+
+
+class FilterAllFilter:
+
+    def __init__(self):
+        self.filter_type = pbFilter.FilterAllFilter
+        self.name = filter_path + "FilterAllFilter"
+
+
+class RowRange:
+
+    def __init__(self, start_row, start_row_inclusive, stop_row, stop_row_inclusive):
+        self.filter_type = pbFilter.RowRange
+        self.name = filter_path + "RowRange"
+        self.start_row = start_row
+        self.start_row_inclusive = start_row_inclusive
+        self.stop_row = stop_row
+        self.stop_row_inclusive = stop_row_inclusive
+
+
+class MultiRowRangeFilter:
+
+    def __init__(self, row_range_list):
+        self.filter_type = pbFilter.MultiRowRangeFilter
+        self.name = filter_path + "MultiRowRangeFilter"
+        self.row_range_list = []
+        try:
+            for row in row_range_list:
+                self.row_range_list.append(_to_filter(row))
+        except TypeError:
+            # They passed a single element and not a sequence of elements.
+            self.row_range_list.append(_to_filter(row_range_list))
+        
+
+# Function will take any of the above classes, create the associated pb
+# type, iterate over any special variables and set them accordingly,
+# serialize the special pb filter type into a standard pb Filter object
+# and return that.
+#
+# Every member variable except 'filter_type' and 'name' will try to be set
+# in the pb filter object.
+def _to_filter(orig_filter):
+    try:
+        ft = pbFilter.Filter()
+        ft.name = orig_filter.name
+        ft2 = orig_filter.filter_type()
+        members = [attr for attr in dir(orig_filter) if not callable(
+            attr) and not attr.startswith("__") and attr not in ["name", "filter_type", "add_filter"]]
+        for member in members:
+            try:
+                setattr(ft2, member, getattr(orig_filter, member))
+            except AttributeError:
+                # It's a repeated element and we need to 'extend' it.
+                el = getattr(ft2, member)
+                try:
+                    el.extend(getattr(orig_filter, member))
+                except AttributeError:
+                    # Just kidding. It's a composite field.
+                    el.CopyFrom(getattr(orig_filter, member))
+        ft.serialized_filter = ft2.SerializeToString()
+        return ft
+    except Exception:
+        raise ValueError("Malformed Filter provided")
+
+
+class ByteArrayComparable:
+
+    def __init__(self, value):
+        self.comparable_type = pbComparator.ByteArrayComparable
+        self.value = value
+
+
+# Just like _to_filter, but for comparables.
+def _to_comparable(orig_cmp):
+    try:
+        new_cmp = orig_cmp.comparable_type()
+        members = [attr for attr in dir(orig_cmp) if not callable(
+            attr) and not attr.startswith("__") and attr not in ["name", "comparable_type"]]
+        for member in members:
+            setattr(new_cmp, member, getattr(orig_cmp, member))
+        return new_cmp
+    except Exception:
+        raise ValueError("Malformed Comparable provided")
+
+
+class BinaryComparator:
+
+    def __init__(self, comparable):
+        self.comparator_type = pbComparator.BinaryComparator
+        self.name = comparator_path + "BinaryComparator"
+        self.comparable = _to_comparable(comparable)
+
+
+class LongComparator:
+
+    def __init__(self, comparable):
+        self.comparator_type = pbComparator.LongComparator
+        self.name = comparator_path + "LongComparator"
+        self.comparable = _to_comparable(comparable)
+
+
+class BinaryPrefixComparator:
+
+    def __init__(self, comparable):
+        self.comparator_type = pbComparator.BinaryPrefixComparator
+        self.name = comparator_path + "BinaryPrefixComparator"
+        self.comparable = _to_comparable(comparable)
+
+
+class BitComparator:
+
+    def __init__(self, comparable, bitwise_op):
+        self.comparator_type = pbComparator.BitComparator
+        self.name = comparator_path + "BitComparator"
+        self.comparable = _to_comparable(comparable)
+        self.bitwise_op = bitwise_op
+
+
+class NullComparator:
+
+    def __init__(self):
+        self.comparator_type = pbComparator.NullComparator
+        self.name = comparator_path + "NullComparator"
+
+
+class RegexStringComparator:
+
+    def __init__(self, pattern, pattern_flags, charset, engine):
+        self.comparator_type = pbComparator.RegexStringComparator
+        self.name = comparator_path + "RegexStringComparator"
+        self.pattern = pattern
+        self.pattern_flags = pattern_flags
+        self.charset = charset
+        self.engine = engine
+
+
+class StringComparator:
+
+    def __init__(self, substr):
+        self.comparator_type = pbComparator.BinaryPrefixComparator
+        self.name = comparator_path + "BinaryPrefixComparator"
+        self.substr = substr
+
+
+# Just like _to_filter, but for comparators.
+def _to_comparator(orig_cmp):
+    try:
+        new_cmp = pbComparator.Comparator()
+        new_cmp.name = orig_cmp.name
+        new_cmp2 = orig_cmp.comparator_type()
+        members = [attr for attr in dir(orig_cmp) if not callable(
+            attr) and not attr.startswith("__") and attr not in ["name", "comparator_type"]]
+        for member in members:
+            try:
+                setattr(new_cmp2, member, getattr(orig_cmp, member))
+            except AttributeError:
+                # It's a composite element and we need to copy it in.
+                el = getattr(new_cmp2, member)
+                el.CopyFrom(getattr(orig_cmp, member))
+        new_cmp.serialized_comparator = new_cmp2.SerializeToString()
+        return new_cmp
+    except Exception:
+        raise ValueError("Malformed Comparator provided")
+
+
+
+class BytesBytesPair:
+
+    def __init__(self, first, second):
+        self.first = first
+        self.second = second
+
+
+def _to_bytes_bytes_pair(bbp):
+    try:
+        new_bbp = pbBytesBytesPair()
+        new_bbp.first = bbp.first
+        new_bbp.second = bbp.second
+        return new_bbp
+    except Exception:
+        raise ValueError("Malformed BytesBytesPair provided")
