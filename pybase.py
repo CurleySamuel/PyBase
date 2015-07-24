@@ -214,7 +214,7 @@ class MainClient:
                     # during splits.
                     self.reverse_region_client_cache[
                         key][1].remove(region_name)
-                except KeyError, ValueError:
+                except (KeyError, ValueError) as e:
                     pass
                 if len(self.reverse_region_client_cache[key][1]) == 0:
                     client.close()

@@ -118,7 +118,8 @@ class Client:
             msg_length = self._recv_n(4)
             if msg_length is None:
                 self.sock_lock.release()
-                return 1 / 0  # TODO
+                raise RuntimeError(
+                    "Received an invalid message length in the response from HBase")
             msg_length = unpack(">I", msg_length)[0]
             # The message is then going to be however many bytes the first four
             # bytes specified. We don't want to overread or underread as that'll
@@ -185,9 +186,13 @@ class Client:
 # Creates a new RegionServer client. Creates the socket, initializes the
 # connection and returns an instance of Client.
 def NewClient(host, port):
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.connect((host, port))
-    _send_hello(s)
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.connect((host, port))
+        _send_hello(s)
+    except socket.error:
+        raise RuntimeError(
+            "Cannot connect to RegionServer {}:{}".format(host, port))
     return Client(host, port, s)
 
 

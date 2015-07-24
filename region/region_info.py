@@ -16,7 +16,8 @@ def region_info_from_cell(cell):
     # 4 bytes: PBUF
     if magic != 1346524486:
         # Either it's a corrupt message or an unsupported region info version.
-        return 1 / 0  # TODO
+        raise RuntimeError(
+            "HBase returned an invalid response (are you running a version of HBase supporting Protobufs?)")
     region_info = pbRegionInfo()
     region_info.ParseFromString(cell.value[4:-4])
     table = region_info.table_name.qualifier
