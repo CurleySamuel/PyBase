@@ -9,6 +9,7 @@ import logging.config
 from intervaltree import Interval, IntervalTree
 from collections import defaultdict
 from itertools import chain
+from threading import Lock
 
 # Using a tiered logger such that all submodules propagate through to this
 # logger. Changing the logging level here should affect all other modules.
@@ -78,6 +79,8 @@ class MainClient:
         # discover a Client no longer tracks any legitimate regions we can
         # close the client and clear up resources.
         self.reverse_region_client_cache = defaultdict(lambda: (None, []))
+        # Mutex used for all caching operations.
+        self._cache_lock = Lock()
 
     def _find_hosting_region_client(self, table, key, return_stop=False):
         # We can probably refactor 'return_stop' out as it's only used for Scan
@@ -143,9 +146,9 @@ class MainClient:
         if client is None:
             client = region.NewClient(host, port)
         # Add to the caches!
-        self._add_to_meta_key_to_region_inf_cache(region_inf)
         self._add_to_region_name_to_region_client_cache(
             region_inf.region_name, client)
+        self._add_to_meta_key_to_region_inf_cache(region_inf)
         return client, region_inf
 
     def _add_to_meta_key_to_region_inf_cache(self, region_inf):
@@ -162,15 +165,19 @@ class MainClient:
         # stale data and will cause a HBase region not served error as there
         # was a split). Before we remove them we want to grab them so we can
         # remove stale data from the other cache.
+        self._cache_lock.acquire()
         old_regions = self.region_inf_cache[start_key:stop_key]
         self._purge_old_region_clients(old_regions)
         self.region_inf_cache.remove_overlap(start_key, stop_key)
         self.region_inf_cache[start_key:stop_key] = region_inf
+        self._cache_lock.release()
 
     def _get_from_meta_key_to_region_inf_cache(self, meta_key):
+        self._cache_lock.acquire()
         # We don't care about the last two characters ',:' in the meta_key.
         meta_key = meta_key[:-2]
         regions = self.region_inf_cache[meta_key]
+        self._cache_lock.release()
         if len(regions) == 0:
             return None
         return regions.pop().data
@@ -187,9 +194,12 @@ class MainClient:
             region_client, self.reverse_region_client_cache[key][1])
 
     def _get_from_region_name_to_region_client_cache(self, region_name):
-        if region_name not in self.region_client_cache:
-            return None
-        return self.region_client_cache[region_name]
+        self._cache_lock.acquire()
+        to_return = None
+        if region_name in self.region_client_cache:
+            to_return = self.region_client_cache[region_name]
+        self._cache_lock.release()
+        return to_return
 
     def _purge_old_region_clients(self, old):
         for interval in old:
@@ -233,7 +243,7 @@ class MainClient:
         # list of lists. We have a list of lists because...
         #       [
         #               [ Cell, Cell, Cell ],     # results from row0
-        #               [ Cell ]                 # results from row1
+        #               [ Cell ]                  # results from row1
         #       ]
         # We may or may not want to return a flattened output. Still undecided.
         return list(chain.from_iterable(

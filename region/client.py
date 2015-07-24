@@ -3,6 +3,7 @@ from struct import pack, unpack
 from pb.RPC_pb2 import ConnectionHeader, RequestHeader, ResponseHeader
 from pb.Client_pb2 import GetResponse, MutateResponse, ScanResponse
 from helpers import varint
+from threading import Lock, Condition
 import logging
 logger = logging.getLogger('pybase.' + __name__)
 logger.setLevel(logging.DEBUG)
@@ -20,10 +21,9 @@ response_types = {
     "Scan": ScanResponse
 }
 
+
 # This Client is created once per RegionServer. Handles all communication
 # to and from this specific RegionServer.
-
-
 class Client:
     # Variables are as follows:
     #   - Host: The hostname of the RegionServer
@@ -36,7 +36,28 @@ class Client:
         self.host = host
         self.port = port
         self.sock = sock
+        # Heh. Sock lock.
+        # Used so only one thread can receive an RPC at a given time. Otherwise
+        # RPCs will come down in broken chunks.
+        self.sock_lock = Lock()
         self.call_id = 0
+        # This dictionary and associated sync primitives are for when _receive_rpc
+        # receives an RPC that isn't theirs. If a thread gets one that isn't
+        # theirs it means there's another thread who also just sent an RPC. The
+        # other thread will also get the wrong call_id. So how do we make them
+        # switch RPCs?
+        #
+        # Receive an RPC with incorrect call_id?
+        #       1. Acquire lock
+        #       2. Place raw data into missed_rpcs with key call_id
+        #       3. Notify all other threads to wake up (nothing will happen until you release the lock)
+        #       4. WHILE: Your call_id is not in the dictionary
+        #               4.5  Call wait() on the conditional and get comfy.
+        #       5. Pop your data out
+        #       6. Release the lock
+        self.missed_rpcs = {}
+        self.missed_rpcs_lock = Lock()
+        self.missed_rpcs_condition = Condition(self.missed_rpcs_lock)
 
     # Sends an RPC over the wire then calls _receive_rpc and returns the
     # response RPC.
@@ -86,17 +107,24 @@ class Client:
     #   4. A varint representing the length of the serialized ResponseMessage.
     #   5. The ResponseMessage.
     #
-    def _receive_rpc(self, call_id, request_type):
-        # Total message length is going to be the first four bytes
-        # (little-endian uint32)
-        msg_length = self._recv_n(4)
-        if msg_length is None:
-            return 1 / 0  # TODO
-        msg_length = unpack(">I", msg_length)[0]
-        # The message is then going to be however many bytes the first four
-        # bytes specified. We don't want to overread or underread as that'll
-        # cause havoc.
-        full_data = self._recv_n(msg_length)
+    def _receive_rpc(self, call_id, request_type, data=None):
+        # If the field data is populated that means we should process from that
+        # instead of the socket.
+        full_data = data
+        if data is None:
+            # Total message length is going to be the first four bytes
+            # (little-endian uint32)
+            self.sock_lock.acquire()
+            msg_length = self._recv_n(4)
+            if msg_length is None:
+                self.sock_lock.release()
+                return 1 / 0  # TODO
+            msg_length = unpack(">I", msg_length)[0]
+            # The message is then going to be however many bytes the first four
+            # bytes specified. We don't want to overread or underread as that'll
+            # cause havoc.
+            full_data = self._recv_n(msg_length)
+            self.sock_lock.release()
         # Pass in the full data as well as your current position to the
         # decoder. It'll then return two variables:
         #       - next_pos: The number of bytes of data specified by the varint
@@ -106,8 +134,10 @@ class Client:
         header.ParseFromString(full_data[pos: pos + next_pos])
         pos += next_pos
         if header.call_id != call_id:
-            # call_ids don't match? Something's wrong.
-            return 1 / 0  # TODO
+            # call_ids don't match? Looks like a different thread nabbed our
+            # response.
+            return self._bad_call_id(call_id, request_type, header.call_id, full_data)
+
         elif header.exception.exception_class_name != u'':
             # Means a remote exception has happened.
             print header.exception.SerializeToString()
@@ -120,6 +150,19 @@ class Client:
         rpc.ParseFromString(full_data[pos: pos + next_pos])
         # The rpc is fully built!
         return rpc
+
+    def _bad_call_id(self, my_id, my_request, msg_id, data):
+        self.missed_rpcs_lock.acquire()
+        logger.info(
+            "Received invalid RPC ID. Got: %s, Expected: %s.", msg_id, my_id)
+        self.missed_rpcs[msg_id] = data
+        self.missed_rpcs_condition.notifyAll()
+        while my_id not in self.missed_rpcs:
+            self.missed_rpcs_condition.wait()
+        new_data = self.missed_rpcs.pop(my_id)
+        logger.info("Another thread found my RPC! RPC ID: %s", my_id)
+        self.missed_rpcs_lock.release()
+        return self._receive_rpc(my_id, my_request, data=new_data)
 
     # Receives exactly n bytes from the socket. Will block until n bytes are
     # received.
