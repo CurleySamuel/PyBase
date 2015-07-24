@@ -10,6 +10,7 @@ from intervaltree import Interval, IntervalTree
 from collections import defaultdict
 from itertools import chain
 from threading import Lock
+from filters import _to_filter
 
 # Using a tiered logger such that all submodules propagate through to this
 # logger. Changing the logging level here should affect all other modules.
@@ -221,6 +222,8 @@ class MainClient:
                     self.reverse_region_client_cache.pop(key, None)
 
     def get(self, table, key, families={}, filters=None):
+        pbFilter = _to_filter(filters)
+
         # Step 1. Figure out where to send it.
         region_client, region_name = self._find_hosting_region_client(
             table, key)
@@ -231,6 +234,8 @@ class MainClient:
         rq.get.column.extend(families_to_columns(families))
         rq.region.type = 1
         rq.region.value = region_name
+        if pbFilter is not None:
+            rq.get.filter.CopyFrom(pbFilter)
 
         # Step 3. Send the message and twiddle our thumbs
         response = region_client._send_rpc(rq, "Get")
@@ -246,9 +251,10 @@ class MainClient:
         #               [ Cell ]                  # results from row1
         #       ]
         # We may or may not want to return a flattened output. Still undecided.
+        pbFilter = _to_filter(filters)
         return list(chain.from_iterable(
             self._scan_helper(
-                table, start_key, stop_key, families, filters, None)
+                table, start_key, stop_key, families, pbFilter, None)
         ))
 
     def _scan_helper(self, table, start_key, stop_key, families, filters, scanner_id):
@@ -311,7 +317,7 @@ class MainClient:
         if stop_key is not None:
             rq.scan.stop_row = stop_key
         if filters is not None:
-            rq.scan.filter = filters
+            rq.scan.filter.CopyFrom(filters)
         return region_client, rq, region_stop_key
 
     # All mutate requests (PUT/DELETE/APP/INC) require a values field that looks like:

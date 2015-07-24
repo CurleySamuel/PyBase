@@ -23,6 +23,7 @@ GREATER_OR_EQUAL = 4
 GREATER = 5
 NO_OP = 6
 
+
 class FilterList:
 
     def __init__(self, operator, filters):
@@ -121,6 +122,7 @@ class FilterWrapper:
         self.name = filter_path + "FilterWrapper"
         self.filter = _to_filter(new_filter)
 
+
 class FirstKeyOnlyFilter:
 
     def __init__(self):
@@ -134,7 +136,6 @@ class FirstKeyValueMatchingQualifiersFilter:
         self.filter_type = pbFilter.FirstKeyValueMatchingQualifiersFilter
         self.name = filter_path + "FirstKeyValueMatchingQualifiersFilter"
         self.qualifiers = qualifiers
-
 
 
 class FuzzyRowFilter:
@@ -193,6 +194,7 @@ class PrefixFilter:
         self.name = filter_path + "PrefixFilter"
         self.prefix = prefix
 
+
 class QualifierFilter:
 
     def __init__(self, compare_filter):
@@ -217,15 +219,13 @@ class RowFilter:
         self.compare_filter = _to_filter(compare_filter)
 
 
-
 class SkipColumnValueExcludeFilter:
 
     def __init__(self, single_column_value_filter):
         self.filter_type = pbFilter.SkipColumnValueExcludeFilter
         self.name = filter_path + "SkipColumnValueExcludeFilter"
-        self.single_column_value_filter = _to_filter(single_column_value_filter)
-
-
+        self.single_column_value_filter = _to_filter(
+            single_column_value_filter)
 
 
 class SkipColumnValueFilter:
@@ -260,7 +260,6 @@ class TimestampsFilter:
             self.timestamps = [timestamps]
 
 
-
 class ValueFilter:
 
     def __init__(self, compare_filter):
@@ -277,23 +276,11 @@ class WhileMatchFilter:
         self.filter = _to_filter(origFilter)
 
 
-
 class FilterAllFilter:
 
     def __init__(self):
         self.filter_type = pbFilter.FilterAllFilter
         self.name = filter_path + "FilterAllFilter"
-
-
-class RowRange:
-
-    def __init__(self, start_row, start_row_inclusive, stop_row, stop_row_inclusive):
-        self.filter_type = pbFilter.RowRange
-        self.name = filter_path + "RowRange"
-        self.start_row = start_row
-        self.start_row_inclusive = start_row_inclusive
-        self.stop_row = stop_row
-        self.stop_row_inclusive = stop_row_inclusive
 
 
 class MultiRowRangeFilter:
@@ -304,11 +291,11 @@ class MultiRowRangeFilter:
         self.row_range_list = []
         try:
             for row in row_range_list:
-                self.row_range_list.append(_to_filter(row))
+                self.row_range_list.append(_to_row_range(row))
         except TypeError:
             # They passed a single element and not a sequence of elements.
-            self.row_range_list.append(_to_filter(row_range_list))
-        
+            self.row_range_list.append(_to_row_range(row_range_list))
+
 
 # Function will take any of the above classes, create the associated pb
 # type, iterate over any special variables and set them accordingly,
@@ -318,6 +305,8 @@ class MultiRowRangeFilter:
 # Every member variable except 'filter_type' and 'name' will try to be set
 # in the pb filter object.
 def _to_filter(orig_filter):
+    if orig_filter is None:
+        return None
     try:
         ft = pbFilter.Filter()
         ft.name = orig_filter.name
@@ -441,7 +430,6 @@ def _to_comparator(orig_cmp):
         raise ValueError("Malformed Comparator provided")
 
 
-
 class BytesBytesPair:
 
     def __init__(self, first, second):
@@ -457,3 +445,27 @@ def _to_bytes_bytes_pair(bbp):
         return new_bbp
     except Exception:
         raise ValueError("Malformed BytesBytesPair provided")
+
+
+class RowRange:
+
+    def __init__(self, start_row, start_row_inclusive, stop_row, stop_row_inclusive):
+        self.filter_type = pbFilter.RowRange
+        self.name = filter_path + "RowRange"
+        self.start_row = start_row
+        self.start_row_inclusive = start_row_inclusive
+        self.stop_row = stop_row
+        self.stop_row_inclusive = stop_row_inclusive
+
+
+def _to_row_range(rr):
+    try:
+        new = pbFilter.RowRange()
+        new.start_row = rr.start_row
+        new.start_row_inclusive = rr.start_row_inclusive
+        new.stop_row = rr.stop_row
+        new.stop_row_inclusive = rr.stop_row_inclusive
+        return new
+    except Exception:
+        raise ValueError("Malformed RowRange provided")
+
