@@ -281,10 +281,7 @@ class MainClient:
         # WARNING - Maximum recursion depth is 998. If we're scanning more than
         # 998 regions then we'll get a stack overflow.
         # TODO: Don't use recursion.
-        return cells_to_return.extend(
-            self._scan_helper(
-                table, region_stop_key, stop_key, families, filters, None, partial_result)
-        )
+        return self._scan_helper(table, region_stop_key, stop_key, families, filters, None, partial_result)
 
     def _scan_build_object(self, table, start_key, stop_key, families, filters, scanner_id, close):
         region_client, region_name, region_stop_key = self._find_hosting_region_client(
