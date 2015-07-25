@@ -1,7 +1,7 @@
 from kazoo.client import KazooClient
 from kazoo.handlers.threading import KazooTimeoutError
 from kazoo.exceptions import NoNodeError
-from pb.ZooKeeper_pb2 import MetaRegionServer
+from ..pb.ZooKeeper_pb2 import MetaRegionServer
 from struct import unpack
 import logging
 logger = logging.getLogger('pybase.' + __name__)

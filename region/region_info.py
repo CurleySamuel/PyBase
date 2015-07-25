@@ -1,5 +1,5 @@
 from struct import unpack
-from pb.HBase_pb2 import RegionInfo as pbRegionInfo
+from ..pb.HBase_pb2 import RegionInfo as pbRegionInfo
 
 
 class RegionInfo:

@@ -1,4 +1,4 @@
-from pb.Client_pb2 import Column, MutationProto
+from ..pb.Client_pb2 import Column, MutationProto
 
 
 #  Converts a dictionary specifying ColumnFamilys -> Qualifiers into the Column pb type.

@@ -1,8 +1,8 @@
 import socket
 from struct import pack, unpack
-from pb.RPC_pb2 import ConnectionHeader, RequestHeader, ResponseHeader
-from pb.Client_pb2 import GetResponse, MutateResponse, ScanResponse
-from helpers import varint
+from ..pb.RPC_pb2 import ConnectionHeader, RequestHeader, ResponseHeader
+from ..pb.Client_pb2 import GetResponse, MutateResponse, ScanResponse
+from ..helpers import varint
 from threading import Lock, Condition
 import logging
 logger = logging.getLogger('pybase.' + __name__)
