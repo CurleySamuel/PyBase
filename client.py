@@ -240,30 +240,20 @@ class MainClient:
         response = region_client._send_rpc(rq, "Get")
 
         # Step 4. Profit
-        return response.result.cell
+        return Result(response)
 
     def scan(self, table, start_key=None, stop_key=None, families={}, filters=None):
-        # Using chain.from_iterable because it's the fastest way to flatten a
-        # list of lists. We have a list of lists because...
-        #       [
-        #               [ Cell, Cell, Cell ],     # results from row0
-        #               [ Cell ]                  # results from row1
-        #       ]
-        # We may or may not want to return a flattened output. Still undecided.
         pbFilter = _to_filter(filters)
-        return list(chain.from_iterable(
-            self._scan_helper(
-                table, start_key, stop_key, families, pbFilter, None)
-        ))
+        return self._scan_helper(table, start_key, stop_key, families, pbFilter, None, Result(None))
 
-    def _scan_helper(self, table, start_key, stop_key, families, filters, scanner_id):
+    def _scan_helper(self, table, start_key, stop_key, families, filters, scanner_id, partial_result):
         cells_to_return = []
         # Create the initial scanner for this region at the specified
         # start_key.
         region_client, rq, region_stop_key = self._scan_build_object(
             table, start_key, stop_key, families, filters, None, False)
         response = region_client._send_rpc(rq, "Scan")
-        cells_to_return.extend([result.cell for result in response.results])
+        partial_result._append_response(response)
         # Response returns a boolean 'more_results_in_region' which indicates
         # exactly what you'd think. If it's true then we need to send another
         # query to the same region with a 'scanner_id' that we got back from
@@ -275,8 +265,7 @@ class MainClient:
             region_client, rq, region_stop_key = self._scan_build_object(
                 table, start_key, None, None, None, response.scanner_id, False)
             response = region_client._send_rpc(rq, "Scan")
-            cells_to_return.extend(
-                [result.cell for result in response.results])
+            partial_result._append_response(response)
 
         # This region's done. Close the region's scanner.
         region_client, rq, region_stop_key = self._scan_build_object(
@@ -285,7 +274,7 @@ class MainClient:
 
         # Should we move on to the next region?
         if region_stop_key == '' or (stop_key is not None and region_stop_key > stop_key):
-            return cells_to_return
+            return partial_result
 
         # We should move on!
         # Recursively keep scanning the next region.
@@ -294,7 +283,7 @@ class MainClient:
         # TODO: Don't use recursion.
         return cells_to_return.extend(
             self._scan_helper(
-                table, region_stop_key, stop_key, families, filters, None)
+                table, region_stop_key, stop_key, families, filters, None, partial_result)
         )
 
     def _scan_build_object(self, table, start_key, stop_key, families, filters, scanner_id, close):
@@ -348,7 +337,7 @@ class MainClient:
         response = region_client._send_rpc(rq, "Mutate")
 
         # Step 4
-        return response
+        return Result(response)
 
     def delete(self, table, key, values):
         # Step 1
@@ -368,7 +357,7 @@ class MainClient:
         response = region_client._send_rpc(rq, "Mutate")
 
         # Step 4
-        return response
+        return Result(response)
 
     def app(self, table, key, values):
         # Step 1
@@ -387,7 +376,7 @@ class MainClient:
         response = region_client._send_rpc(rq, "Mutate")
 
         # Step 4
-        return response
+        return Result(response)
 
     def inc(self, table, key, values):
         # Step 1
@@ -406,7 +395,35 @@ class MainClient:
         response = region_client._send_rpc(rq, "Mutate")
 
         # Step 4
-        return response
+        return Result(response)
+
+
+class Result:
+
+    def __init__(self, rsp):
+        self.stale = False
+        self.cells = []
+        if rsp is not None:
+            # We're a mutate/get
+            self.cells = rsp.result.cell
+            self.exists = rsp.result.exists
+            self.stale = self.stale or rsp.result.stale
+            try:
+                self.processed = rsp.processed
+            except AttributeError:
+                # We're a get. Don't need no processed.
+                pass
+
+    def flatten_cells(self):
+        try:
+            return list(chain.from_iterable(self.cells))
+        except TypeError:
+            # We have a single cell.
+            return self.cells
+
+    def _append_response(self, rsp):
+        self.cells.extend([result.cell for result in rsp.results])
+        self.stale = self.stale or rsp.stale
 
 
 # Entrypoint into the whole system. Given a string representing the
