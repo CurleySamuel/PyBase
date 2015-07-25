@@ -3,10 +3,9 @@ import region.client as region
 from pb.Client_pb2 import GetRequest, MutateRequest, ScanRequest
 from helpers.helpers import families_to_columns, values_to_column_values
 import region.region_info as region_info
-import sys
 import logging
 import logging.config
-from intervaltree import Interval, IntervalTree
+from intervaltree import IntervalTree
 from collections import defaultdict
 from itertools import chain
 from threading import Lock
@@ -215,7 +214,7 @@ class MainClient:
                     # during splits.
                     self.reverse_region_client_cache[
                         key][1].remove(region_name)
-                except (KeyError, ValueError) as e:
+                except (KeyError, ValueError):
                     pass
                 if len(self.reverse_region_client_cache[key][1]) == 0:
                     client.close()
@@ -349,7 +348,7 @@ class MainClient:
         response = region_client._send_rpc(rq, "Mutate")
 
         # Step 4
-        # Do we need to return anything?
+        return response
 
     def delete(self, table, key, values):
         # Step 1
@@ -369,7 +368,7 @@ class MainClient:
         response = region_client._send_rpc(rq, "Mutate")
 
         # Step 4
-        # Do we need to return anything?
+        return response
 
     def app(self, table, key, values):
         # Step 1
@@ -388,7 +387,7 @@ class MainClient:
         response = region_client._send_rpc(rq, "Mutate")
 
         # Step 4
-        # Do we need to return anything?
+        return response
 
     def inc(self, table, key, values):
         # Step 1
@@ -407,7 +406,7 @@ class MainClient:
         response = region_client._send_rpc(rq, "Mutate")
 
         # Step 4
-        # Do we need to return anything?
+        return response
 
 
 # Entrypoint into the whole system. Given a string representing the

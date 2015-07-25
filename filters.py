@@ -107,14 +107,6 @@ class FamilyFilter:
         self.compare_filter = _to_filter(compare_filter)
 
 
-class FamilyFilter:
-
-    def __init__(self, compare_filter):
-        self.filter_type = pbFilter.FamilyFilter
-        self.name = filter_path + "FamilyFilter"
-        self.compare_filter = _to_filter(compare_filter)
-
-
 class FilterWrapper:
 
     def __init__(self, new_filter):
