@@ -10,6 +10,7 @@ from collections import defaultdict
 from itertools import chain
 from threading import Lock
 from filters import _to_filter
+from socket import error as sockerr
 
 # Using a tiered logger such that all submodules propagate through to this
 # logger. Changing the logging level here should affect all other modules.
@@ -144,11 +145,15 @@ class MainClient:
         # Check if we already have a client serving this RegionServer
         client = self.reverse_region_client_cache[host + ":" + str(port)][0]
         if client is None:
+            logger.info(
+                "Creating new Client for RegionServer %s:%s", host, port)
             client = region.NewClient(host, port)
         # Add to the caches!
         self._add_to_region_name_to_region_client_cache(
             region_inf.region_name, client)
         self._add_to_meta_key_to_region_inf_cache(region_inf)
+        logger.info(
+            "Successfully discovered new region %s", region_inf.region_name)
         return client, region_inf
 
     def _add_to_meta_key_to_region_inf_cache(self, region_inf):
@@ -184,7 +189,7 @@ class MainClient:
 
     def _add_to_region_name_to_region_client_cache(self, region_name, region_client):
         self.region_client_cache[region_name] = region_client
-        key = region_client.host = ":" + str(region_client.port)
+        key = region_client.host + ":" + str(region_client.port)
         # Annoying but need to do the below and tuples are immutable -
         #       "host:port": (None, [])
         #        -->
@@ -237,10 +242,27 @@ class MainClient:
             rq.get.filter.CopyFrom(pbFilter)
 
         # Step 3. Send the message and twiddle our thumbs
-        response = region_client._send_rpc(rq, "Get")
+        try:
+            response = region_client._send_rpc(rq, "Get")
+        except sockerr:
+            # Something's bad with the RegionServer. It could be temporary or
+            # permanent but we're going to purge our cache for everything in
+            # that server and ask Meta for more deets.
 
-        # Step 4. Profit
+            # The parameters here are funky. Here's an explanation -
+            #   self._handle_bad_region_server( first, second )
+            #           first : a tuple containing the region_client instance and region_name
+            #           second : a tuple containing:
+            #                           - the name of the function that this call originated from
+            #                           - a list of all the original arguments for this call
+            return self._handle_bad_region_server((region_client, region_name), ("_get", (table, key, families, filters)))
+
+            # Step 4. Profit
         return Result(response)
+
+    def _get(self, table, key, families, filters):
+        print table, key, families, filters
+        return self.get(table, key, families=families, filters=filters)
 
     def scan(self, table, start_key=None, stop_key=None, families={}, filters=None):
         pbFilter = _to_filter(filters)
@@ -393,6 +415,44 @@ class MainClient:
 
         # Step 4
         return Result(response)
+
+    # TODO: I /think/ this is threadsafe but needs to be tested.
+    def _handle_bad_region_server(self, region_tuple, rq_tuple):
+        region_client = region_tuple[0]
+        key = region_client.host + ":" + str(region_client.port)
+        region_name = region_tuple[1]
+        logger.warn(
+            'Issue detected on RegionServer %s for Region %s', key, region_name)
+
+        # Step 1. Grab the cache mutex
+        self._cache_lock.acquire()
+
+        # Step 2. Purge the caches of relevant information.
+        # This is our way of removing redundant work. If another thread has
+        # already come in here then they'll have generated a new client and
+        # deleted the old entry.
+        old_client, regions_to_kill = self.reverse_region_client_cache.pop(
+            key, (None, None))
+        if old_client is not None:
+            logger.warn(
+                'Purging all cache entries for RegionServer %s and Region %s', key, region_name)
+            # We're the first! Purge ALL the caches!
+            for region in regions_to_kill:
+                self.region_client_cache.pop(region, None)
+                # Parse the region_name and construct the meta_key for the
+                # start of the region.
+                meta_key = region_name[:region_name.rfind(',')]
+                del self.region_inf_cache[meta_key]
+
+            # Step 2.5. Close the client for the RegionServer.
+            old_client.close()
+
+        # Step 3. Send 'er off again.
+        self._cache_lock.release()
+        func = getattr(self, rq_tuple[0], None)
+        if func is None:
+            raise RuntimeError("oh god we broke something")
+        return func(*rq_tuple[1])
 
 
 class Result:

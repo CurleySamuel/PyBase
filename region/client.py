@@ -92,7 +92,11 @@ class Client:
         to_send += serialized_header + rpc_length_bytes + serialized_rpc
 
         self.call_id += 1
-        self.sock.send(to_send)
+        try:
+            self.sock.send(to_send)
+        except socket.error as serr:
+            # RegionServer dead?
+            raise serr
         # Message is sent! Now go listen for the results.
         return self._receive_rpc(self.call_id - 1, request_type)
 
@@ -118,7 +122,7 @@ class Client:
             msg_length = self._recv_n(4)
             if msg_length is None:
                 self.sock_lock.release()
-                raise RuntimeError(
+                raise socket.error(
                     "Received an invalid message length in the response from HBase")
             msg_length = unpack(">I", msg_length)[0]
             # The message is then going to be however many bytes the first four
@@ -166,19 +170,23 @@ class Client:
         return self._receive_rpc(my_id, my_request, data=new_data)
 
     # Receives exactly n bytes from the socket. Will block until n bytes are
-    # received.
+    # received. If a socket is closed (RegionServer died) then raise an
+    # exception that goes all the way back to the main client
     def _recv_n(self, n):
         data = ''
         while len(data) < n:
-            packet = self.sock.recv(n - len(data))
+            try:
+                packet = self.sock.recv(n - len(data))
+            except socket.error as serr:
+                # RegionServer looks to be ded.
+                self.sock_lock.release()
+                raise serr
             if not packet:
                 return None
             data += packet
         return data
 
-    # Do any work to close open file descriptors, etc. When I convert the code
-    # to become asynchronous + multithreaded this function gets very hairy
-    # very quickly.
+    # Do any work to close open file descriptors, etc.
     def close(self):
         self.sock.close()
 
