@@ -1,3 +1,98 @@
+"""
+    TODO: Put in DESIGN.md
+    
+    So how does this client work? Before we get into that be sure to get intimate 
+    with the following terminology - 
+
+    - RPC:              Generic term I throw around. My intended meaning is any HBase operation 
+                        [Get, Put, Append, Increment, Scan, ...] etc.
+
+    - Client:           Entrypoint for all RPC requests. Returned to the user in NewClient() the 
+                        user will then funnel all operations through this client (client.get(), 
+                        client.scan(), etc)
+
+    - Region Client:    This is a slight misnomer but we create an instance of a Region Client 
+                        class once for every RegionServer. Any operations that interact with that 
+                        RegionServer then go through the appropriate Region Client.
+
+    - Meta Client:      A special case of a Region Client, the Meta client's sole purpose in life 
+                        is to look up information about which region a specific table/key is 
+                        stored in and then where that region lives.
+
+    - Region:           C'mon, you should know this one. A region represents a slice of rows that 
+                        exist together as a blob in HBase. An example region could be 
+                        { "table": "hodor", "start_key": 1500, "end_key": 4000 }. This means that 
+                        all data in table hodor between keys 1500 and 4000 is hosted by this region.
+
+    - Region Server:    Region Servers (RS for short) are physical servers in HBase clusters that 
+                        hold a bunch of regions. If we want information for a specific key we have 
+                        to find which region that key falls into, which RS hosts that region and 
+                        then ask that RS for the juicy deets on that key.
+
+    
+    So with that out of the way - let's begin. Given a get request, below is the simplified flow.
+
+    Step 0.             Create a meta client instance if not already exists. This involves going to 
+                        ZK and asking ZK which server is hosting the meta information for HBase. 
+                        We then send a special hello message including details about protocols, 
+                        compression, etc.
+
+    Step 1.             Locate the region and RS that holds this key
+
+        Step 1.1        Consult our IntervalTree cache of ranges of rows -> region information. If 
+                        we get a cache hit, grab the region client instance from a different cache 
+                        and GOTO Step 2.
+
+        Step 1.2        Cache miss? Go to the Meta Client and ask them for the region and region 
+                        location for a specific key. If a Region Client doesn't already exist for 
+                        that RegionServer (that the region is located on) then create that puppy.
+
+        Step 1.3        Take this fancy new information and insert it into our caches so subsequent 
+                        requests can avoid having to ping the meta client.
+
+    Step 2.             Construct the appropriate RPC and send it over the wire.
+
+        Step 2.x        RegionServer ded? Purge the caches of all relevant information and run back
+                        to the meta client to get the new deets on regions and region locations. 
+                        Create the appropriate clients. GOTO Step 2.
+
+        Step 2.x        RegionServer threw a remote exception back at you? (ex. 'Region not served' 
+                        which means there was a split or regions or being shuffled in the 
+                        background) Handle it appropriately and either purge your caches and look 
+                        up the new location or do something else.    
+
+        Step 2.x        There's room for improvement here where we can try to batch requests going 
+                        to the same region. This will introduce some latency but should decrease 
+                        network load.
+
+    Step 3.             Listen for the RS's response. Then do a few fancy things to decode the 
+                        response and build the results. We want to hide the protobuf layer so 
+                        there's some code which alias's pb types and returns a 'Result' object. 
+                        Note that because I didn't want to do a O(n) operation over every cell to 
+                        copy them to my own type, 'Cell' is still the pb type.
+
+
+    Easy right? That's the general flow for most RPCs, although Scan's get a little more complex. 
+    A scan has to do Steps 1-3 above, N times where N is the number of regions you're scanning over.
+
+    Step 1.             Find the region + RS hosting the start_key of your scan. This is either the 
+                        start of the table or a specified start_key if you know it.
+
+    Step 2.             Create a new Scan RPC and send it to the RS. The RS will respond with some 
+                        data and a scanner_id. If not all the return data from this region could be
+                        fit into one response you have to repeatedly ping this same region until 
+                        you've exhausted the scanner.
+
+    Step 3.             Is the end_key of this region greater than the user specified end_key 
+                        (or is it the last region for a table?). Woohoo, you're done! Return the 
+                        results. Otherwise keep going.
+
+    Step 4.             Given the end_key of the region you just scanned, locate the next region 
+                        you should scan. Don't have the region in your caches? Run back to the 
+                        meta client and ask nicely then create any appropriate clients. Once you 
+                        know the region information, GOTO Step 2 and append your partial result.
+
+"""
 import zk.client as zk
 import region.client as region
 from pb.Client_pb2 import GetRequest, MutateRequest, ScanRequest
@@ -260,8 +355,11 @@ class MainClient:
             # Step 4. Profit
         return Result(response)
 
+    # Little unfortunate we need this function but the region re-establishment
+    # code is generic across all request types. Because requests take
+    # different arguments (some of which are named) this function takes a list
+    # of arguments and calls get with the named arguments properly 'named'
     def _get(self, table, key, families, filters):
-        print table, key, families, filters
         return self.get(table, key, families=families, filters=filters)
 
     def scan(self, table, start_key=None, stop_key=None, families={}, filters=None):
@@ -353,7 +451,10 @@ class MainClient:
         rq.mutation.column_value.extend(values_to_column_values(values))
 
         # Step 3
-        response = region_client._send_rpc(rq, "Mutate")
+        try:
+            response = region_client._send_rpc(rq, "Mutate")
+        except sockerr:
+            return self._handle_bad_region_server((region_client, region_name), ("put", (table, key, values)))
 
         # Step 4
         return Result(response)
@@ -373,7 +474,10 @@ class MainClient:
             values_to_column_values(values, delete=True))
 
         # Step 3
-        response = region_client._send_rpc(rq, "Mutate")
+        try:
+            response = region_client._send_rpc(rq, "Mutate")
+        except sockerr:
+            return self._handle_bad_region_server((region_client, region_name), ("delete", (table, key, values)))
 
         # Step 4
         return Result(response)
@@ -392,7 +496,10 @@ class MainClient:
         rq.mutation.column_value.extend(values_to_column_values(values))
 
         # Step 3
-        response = region_client._send_rpc(rq, "Mutate")
+        try:
+            response = region_client._send_rpc(rq, "Mutate")
+        except sockerr:
+            return self._handle_bad_region_server((region_client, region_name), ("app", (table, key, values)))
 
         # Step 4
         return Result(response)
@@ -411,12 +518,21 @@ class MainClient:
         rq.mutation.column_value.extend(values_to_column_values(values))
 
         # Step 3
-        response = region_client._send_rpc(rq, "Mutate")
+        try:
+            response = region_client._send_rpc(rq, "Mutate")
+        except sockerr:
+            return self._handle_bad_region_server((region_client, region_name), ("inc", (table, key, values)))
 
         # Step 4
         return Result(response)
 
     # TODO: I /think/ this is threadsafe but needs to be tested.
+    #
+    # Pretty much any failed socket operations in the region clients will
+    # cause this puppy to be called. Purges all cache entries that relate to
+    # this region server, closes the client for the server, locates the
+    # request's region's new location, establishes a connection with that
+    # RegionServer if it doesn't exist already and then redoes the request.
     def _handle_bad_region_server(self, region_tuple, rq_tuple):
         region_client = region_tuple[0]
         key = region_client.host + ":" + str(region_client.port)
@@ -451,7 +567,8 @@ class MainClient:
         self._cache_lock.release()
         func = getattr(self, rq_tuple[0], None)
         if func is None:
-            raise RuntimeError("oh god we broke something")
+            raise RuntimeError("this should never happen")
+        # Recall whatever function failed with the original params.
         return func(*rq_tuple[1])
 
 
