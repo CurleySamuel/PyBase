@@ -218,7 +218,18 @@ class MainClient:
         rq.get.closest_row_before = True
         rq.region.type = 1
         rq.region.value = metaTableName
-        rsp = self.meta_client._send_rpc(rq, "Get")
+        try:
+            rsp = self.meta_client._send_rpc(rq, "Get")
+        except sockerr:
+            # Well this is bad. The master server (meta client) is dead. Need
+            # to reestablish that pup as well now. Back to ZK!
+            logger.warn(
+                "Master server is down! Attempting to reestablish.")
+            ip, port = zk.LocateMeta(self.zkquorum)
+            meta_client = region.NewClient(ip, port)
+            self.meta_client.close()
+            self.meta_client = meta_client
+            return self._discover_region(meta_key, return_stop)
         client, region_inf = self._create_new_region(rsp)
         if return_stop:
             return client, region_inf.region_name, region_inf.stop_key
@@ -307,7 +318,7 @@ class MainClient:
             region_name = interval.data.region_name
             client = self.region_client_cache.pop(region_name, None)
             if client is not None:
-                key = client.host + ":" + client.port
+                key = client.host + ":" + str(client.port)
                 try:
                     # Be aware that .remove is a O(n) operation where n =
                     # number of regions in a RegionServer. Not ideal but this
@@ -371,10 +382,14 @@ class MainClient:
         cells_to_return = []
         # Create the initial scanner for this region at the specified
         # start_key.
-        region_client, rq, region_stop_key = self._scan_build_object(
+        region_client, rq, region_stop_key, region_name = self._scan_build_object(
             table, start_key, stop_key, families, filters, None, False)
-        response = region_client._send_rpc(rq, "Scan")
-        partial_result._append_response(response)
+        try:
+            response = region_client._send_rpc(rq, "Scan")
+            partial_result._append_response(response)
+        except sockerr:
+            return self._handle_bad_region_server((region_client, region_name), (
+                "_scan_helper", (table, start_key, stop_key, families, filters, scanner_id, partial_result)))
         # Response returns a boolean 'more_results_in_region' which indicates
         # exactly what you'd think. If it's true then we need to send another
         # query to the same region with a 'scanner_id' that we got back from
@@ -424,7 +439,7 @@ class MainClient:
             rq.scan.stop_row = stop_key
         if filters is not None:
             rq.scan.filter.CopyFrom(filters)
-        return region_client, rq, region_stop_key
+        return region_client, rq, region_stop_key, region_name
 
     # All mutate requests (PUT/DELETE/APP/INC) require a values field that looks like:
     #
@@ -558,7 +573,7 @@ class MainClient:
                 self.region_client_cache.pop(region, None)
                 # Parse the region_name and construct the meta_key for the
                 # start of the region.
-                meta_key = region_name[:region_name.rfind(',')]
+                meta_key = region[:region.rfind(',')]
                 del self.region_inf_cache[meta_key]
 
             # Step 2.5. Close the client for the RegionServer.
