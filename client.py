@@ -1,8 +1,9 @@
 """
     TODO: Put in DESIGN.md
     
-    So how does this client work? Before we get into that be sure to get intimate 
-    with the following terminology - 
+    So has anyone really been far even as decided to use even go want to do look more like? 
+    (What's involved in an HBase client?) Before we get into that be sure to get intimate with 
+    the following terminology - 
 
     - RPC:              Generic term I throw around. My intended meaning is any HBase operation 
                         [Get, Put, Append, Increment, Scan, ...] etc.
@@ -30,7 +31,7 @@
                         then ask that RS for the juicy deets on that key.
 
     
-    So with that out of the way - let's begin. Given a get request, below is the simplified flow.
+    With that out of the way - let's begin. Given a get request, below is the simplified flow.
 
     Step 0.             Create a meta client instance if not already exists. This involves going to 
                         ZK and asking ZK which server is hosting the meta information for HBase. 
