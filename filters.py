@@ -6,8 +6,8 @@ filter_path = "org.apache.hadoop.hbase.filter."
 comparator_path = "org.apache.hadoop.hbase.filter."
 
 # Operators
-MUST_PASS_ONE = 1
-MUST_PASS_ALL = 2
+MUST_PASS_ALL = 1
+MUST_PASS_ONE = 2
 
 # BitwiseOps
 AND = 1

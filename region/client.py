@@ -145,11 +145,14 @@ class Client:
 
         elif header.exception.exception_class_name != u'':
             # Means a remote exception has happened.
-            print header.exception.SerializeToString()
-            # TODO: We should be raising a custom Error here but for the
-            # meantime we're printing the remote exception stack and then
-            # failing silently.
-            return
+            if header.exception.exception_class_name == 'org.apache.hadoop.hbase.regionserver.NoSuchColumnFamilyException':
+                err_type = ValueError
+                err_msg = "Invalid column family specified"
+            else:
+                err_type = RuntimeError
+                err_msg = header.exception.exception_class_name
+            raise err_type(err_msg + ". Remote traceback:\n\n%s" %
+                           header.exception.stack_trace)
         next_pos, pos = decoder(full_data, pos)
         rpc = response_types[request_type]()
         rpc.ParseFromString(full_data[pos: pos + next_pos])

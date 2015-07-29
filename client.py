@@ -240,6 +240,8 @@ class MainClient:
     def _create_new_region(self, rsp):
         # Response comes down in different cells, each cell giving different
         # information. Iterate over them and pull what we need.
+        if len(rsp.result.cell) == 0:
+            raise ValueError("Table does not exist")
         for cell in rsp.result.cell:
             if cell.qualifier == "regioninfo":
                 region_inf = region_info.region_info_from_cell(cell)
@@ -587,6 +589,20 @@ class MainClient:
         # Recall whatever function failed with the original params.
         return func(*rq_tuple[1])
 
+    # Closes the client and all region clients, freeing up all file descriptors.
+    #
+    # An unintended side effect of how awesome I am is that the client can
+    # still be used in the future, but the first request after closing will
+    # take some time to reestablish a connection to zk, master server and all
+    # region servers.
+    def close(self):
+        self.meta_client.close()
+        self.region_inf_cache.clear()
+        self.region_client_cache = {}
+        for _, tup in self.reverse_region_client_cache.items():
+            tup[0].close()
+        self.reverse_region_client_cache = defaultdict(lambda: (None, []))
+
 
 class Result:
 
@@ -620,8 +636,8 @@ class Result:
 # location of ZooKeeper this function will ask ZK for the location of the
 # meta table and create the region client responsible for future meta
 # lookups (metaclient). Returns an instance of MainClient
-def NewClient(zkquorum):
-    ip, port = zk.LocateMeta(zkquorum)
+def NewClient(zkquorum, timeout=5):
+    ip, port = zk.LocateMeta(zkquorum, timeout=timeout)
     meta_client = region.NewClient(ip, port)
     return MainClient(zkquorum, meta_client)
 

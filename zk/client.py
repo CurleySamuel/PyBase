@@ -13,12 +13,12 @@ znode = "/hbase"
 # LocateMeta takes a string representing the location of the ZooKeeper
 # quorum. It then asks ZK for the location of the MetaRegionServer,
 # returning a tuple containing (host_name, port).
-def LocateMeta(zkquorum):
+def LocateMeta(zkquorum, timeout=5):
 
     # Using Kazoo for interfacing with ZK
     zk = KazooClient(hosts=zkquorum)
     try:
-        zk.start(timeout=5)
+        zk.start(timeout=timeout)
     except KazooTimeoutError:
         raise RuntimeError(
             "Cannot connect to ZooKeeper at {}".format(zkquorum))
