@@ -596,6 +596,7 @@ class MainClient:
     # take some time to reestablish a connection to zk, master server and all
     # region servers.
     def close(self):
+        logger.info("Closing main client")
         self.meta_client.close()
         self.region_inf_cache.clear()
         self.region_client_cache = {}

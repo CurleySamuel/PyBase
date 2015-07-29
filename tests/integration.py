@@ -63,6 +63,10 @@ class TestGet(unittest.TestCase):
         cls.c.put(table, cls.__name__, cls.values)
         cls.row_prefix = cls.__name__
 
+    @classmethod
+    def tearDownClass(cls):
+        cls.c.close()
+
     def test_get_entire_row(self):
         res = self.c.get(table, self.row_prefix)
         self.assertEqual(result_to_dict(res), self.values)
@@ -133,6 +137,10 @@ class TestPut(unittest.TestCase):
         }
         cls.row_prefix = cls.__name__
 
+    @classmethod
+    def tearDownClass(cls):
+        cls.c.close()
+
     def test_put_single_cell(self):
         values = {
             cf1: {
@@ -195,6 +203,10 @@ class TestScan(unittest.TestCase):
         for x in range(cls.num_ops):
             cls.c.put(table, cls.row_prefix + str(x), cls.values)
 
+    @classmethod
+    def tearDownClass(cls):
+        cls.c.close()
+
     def test_scan_simple(self):
         rsp = self.c.scan(table, filters=self.pFilter)
         self.assertEqual(len(rsp.flatten_cells()), 200)
@@ -249,38 +261,160 @@ class TestScan(unittest.TestCase):
 
 class TestDelete(unittest.TestCase):
 
+    @classmethod
+    def setUpClass(cls):
+        cls.c = pybase.NewClient(zkquorum)
+        cls.families = {
+            cf1: ["oberyn"],
+            cf2: ["one"]
+        }
+        cls.values = {
+            cf1: {
+                "oberyn": "is the",
+            },
+            cf2: {
+                "one": "true king"
+            }
+        }
+        cls.row_prefix = cls.__name__
+        for x in range(5):
+            cls.c.put(table, cls.row_prefix + str(x), cls.values)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.c.close()
+
     def test_delete_entire_row(self):
-        pass
+        rsp = self.c.delete(table, self.row_prefix + "0", self.values)
+        self.assertTrue(rsp.processed)
+        rsp = self.c.get(table, self.row_prefix + "0", self.families)
+        self.assertEqual(len(rsp.flatten_cells()), 0)
 
     def test_delete_specific_cell(self):
-        pass
+        value = {
+            cf1: {
+                "oberyn": ""
+            }
+        }
+        rsp = self.c.delete(table, self.row_prefix + "1", value)
+        self.assertTrue(rsp.processed)
+        rsp = self.c.get(table, self.row_prefix + "1", self.families)
+        self.assertEqual(len(rsp.flatten_cells()), 1)
 
     def test_delete_bad_row(self):
-        pass
+        rsp = self.c.delete(table, "unknownrow", self.values)
+        self.assertFalse(rsp.exists)
 
     def test_delete_bad_column_family(self):
-        pass
+        value = {
+            cf1: {
+                "oberyn": ""
+            },
+            "hodor": {
+                "i am hodor": ""
+            }
+        }
+        try:
+            rsp = self.c.delete(table, self.row_prefix + "2", value)
+            self.assertEqual(0, 1)
+        except ValueError:
+            pass
 
     def test_delete_bad_column_qualifier(self):
-        pass
+        value = {
+            cf1: {
+                "badqual": "",
+                "oberyn": ""
+            }
+        }
+        rsp = self.c.delete(table, self.row_prefix + "3", value)
+        self.assertFalse(rsp.exists)
+        rsp = self.c.get(table, self.row_prefix + "3", self.families)
+        self.assertEqual(len(rsp.flatten_cells()), 1)
 
 
 class TestAppend(unittest.TestCase):
 
+    @classmethod
+    def setUpClass(cls):
+        cls.c = pybase.NewClient(zkquorum)
+        cls.families = {
+            cf1: ["oberyn"],
+            cf2: ["one"]
+        }
+        cls.values = {
+            cf1: {
+                "oberyn": "is the",
+            },
+            cf2: {
+                "one": "true king"
+            }
+        }
+        cls.row_prefix = cls.__name__
+        for x in range(5):
+            cls.c.put(table, cls.row_prefix + str(x), cls.values)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.c.close()
+
     def test_append_entire_row(self):
-        pass
+        rsp = self.c.app(table, self.row_prefix + "0", self.values)
+        rspd = result_to_dict(rsp)
+        self.assertEqual(rspd[cf1], {'oberyn': 'is theis the'})
+        self.assertEqual(rspd[cf2], {'one': 'true kingtrue king'})
+        rsp = self.c.get(table, self.row_prefix + "0", self.families)
+        rspd = result_to_dict(rsp)
+        self.assertEqual(rspd[cf1], {'oberyn': 'is theis the'})
+        self.assertEqual(rspd[cf2], {'one': 'true kingtrue king'})
 
     def test_append_specific_cell(self):
-        pass
+        values = {
+            cf1: {
+                "oberyn": " append!"
+            }
+        }
+        rsp = self.c.app(table, self.row_prefix + "1", values)
+        rspd = result_to_dict(rsp)
+        self.assertEqual(rspd[cf1], {'oberyn': 'is the append!'})
+        rsp = self.c.get(table, self.row_prefix + "1", self.families)
+        rspd = result_to_dict(rsp)
+        self.assertEqual(rspd[cf1], {'oberyn': 'is the append!'})
+        self.assertEqual(rspd[cf2], {'one': 'true king'})
 
     def test_append_bad_row(self):
-        pass
+        rsp = self.c.delete(table, self.row_prefix + "2", self.values)
+        rsp = self.c.app(table, self.row_prefix + "2", self.values)
+        self.assertFalse(rsp.processed)
+        rsp = self.c.get(table, self.row_prefix + "2")
+        self.assertEqual(len(rsp.cells), 0)
 
     def test_append_bad_column_family(self):
-        pass
+        values = {
+            "hodor": {
+                "oberyn": "is the",
+            }
+        }
+        try:
+            # TODO. This returns a strange remote exception. We may want to
+            # look into translating that into the bad cf exception?
+            # RuntimeError: java.io.IOException.
+            rsp = self.c.app(table, self.row_prefix + "3", values)
+            self.assertEqual(1, 0)
+        except RuntimeError:
+            pass
 
     def test_append_bad_column_qualifier(self):
-        pass
+        values = {
+            cf1: {
+                "hodor": "hodor"
+            }
+        }
+        rsp = self.c.delete(table, self.row_prefix + "4", values)
+        rsp = self.c.app(table, self.row_prefix + "4", values)
+        self.assertFalse(rsp.processed)
+        rsp = self.c.get(table, self.row_prefix + "4")
+        self.assertEqual(len(rsp.flatten_cells()), 2)
 
 
 class TestIncrement(unittest.TestCase):
