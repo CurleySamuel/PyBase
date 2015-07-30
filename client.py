@@ -107,6 +107,7 @@ from itertools import chain
 from threading import Lock
 from filters import _to_filter
 from socket import error as sockerr
+from time import sleep
 
 # Using a tiered logger such that all submodules propagate through to this
 # logger. Changing the logging level here should affect all other modules.
@@ -220,17 +221,31 @@ class MainClient:
         rq.region.value = metaTableName
         try:
             rsp = self.meta_client._send_rpc(rq, "Get")
-        except sockerr:
-            # Well this is bad. The master server (meta client) is dead. Need
-            # to reestablish that pup as well now. Back to ZK!
+        except (sockerr, LookupError):
+            # Well this is bad.
+            # Either the master server (meta client) is dead (sockerr), or it's
+            # no longer the master and doesn't hold the meta anymore
+            # (LookupError). Either way need to fall back to ZK.
             logger.warn(
-                "Master server is down! Attempting to reestablish.")
+                "Master server is either dead or no longer master! Attempting to reestablish.")
             ip, port = zk.LocateMeta(self.zkquorum)
             meta_client = region.NewClient(ip, port)
             self.meta_client.close()
             self.meta_client = meta_client
             return self._discover_region(meta_key, return_stop)
-        client, region_inf = self._create_new_region(rsp)
+        except IOError:
+            # The region is offline for whatever reason. Lets retry the request.
+            # TODO: Avoid incidental infinite loops.
+            return self._discover_region(meta_key, return_stop)
+        try:
+            client, region_inf = self._create_new_region(rsp)
+        except RuntimeError:
+            # The master server gave us bad information. Let's sleep for half a
+            # second and then retry the query.
+            logger.warn(
+                "Received dead RegionServer information from MasterServer. Retrying in 1 second")
+            sleep(1.0)
+            return self._discover_region(meta_key, return_stop)
         if return_stop:
             return client, region_inf.region_name, region_inf.stop_key
         return client, region_inf.region_name
@@ -256,6 +271,10 @@ class MainClient:
         if client is None:
             logger.info(
                 "Creating new Client for RegionServer %s:%s", host, port)
+            # If we cannot connect to the provided server details then
+            # NewClient will raise a RuntimeError. We'll catch the exception
+            # higher up because we don't have the original request information
+            # here.
             client = region.NewClient(host, port)
         # Add to the caches!
         self._add_to_region_name_to_region_client_cache(
@@ -601,7 +620,8 @@ class MainClient:
         self.region_inf_cache.clear()
         self.region_client_cache = {}
         for _, tup in self.reverse_region_client_cache.items():
-            tup[0].close()
+            if tup[0] is not None:
+                tup[0].close()
         self.reverse_region_client_cache = defaultdict(lambda: (None, []))
 
 
@@ -638,7 +658,7 @@ class Result:
 # meta table and create the region client responsible for future meta
 # lookups (metaclient). Returns an instance of MainClient
 def NewClient(zkquorum, timeout=5):
-    ip, port = zk.LocateMeta(zkquorum, timeout=timeout)
+    ip, port = zk.LocateMeta(zkquorum, establish_connection_timeout=timeout)
     meta_client = region.NewClient(ip, port)
     return MainClient(zkquorum, meta_client)
 

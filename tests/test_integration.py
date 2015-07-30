@@ -1,10 +1,11 @@
 import unittest
 import pybase
 from collections import defaultdict
+from time import sleep
+
 
 # Please note that all below unit tests require the existence of a table
 # to play with. Table must contain two column families specified below as well.
-
 table = "test"
 zkquorum = "localhost"
 cf1 = "cf1"
@@ -345,6 +346,7 @@ class TestAppend(unittest.TestCase):
         cls.values = {
             cf1: {
                 "oberyn": "is the",
+
             },
             cf2: {
                 "one": "true king"
@@ -396,9 +398,6 @@ class TestAppend(unittest.TestCase):
             }
         }
         try:
-            # TODO. This returns a strange remote exception. We may want to
-            # look into translating that into the bad cf exception?
-            # RuntimeError: java.io.IOException.
             rsp = self.c.app(table, self.row_prefix + "3", values)
             self.assertEqual(1, 0)
         except RuntimeError:
@@ -419,46 +418,176 @@ class TestAppend(unittest.TestCase):
 
 class TestIncrement(unittest.TestCase):
 
+    @classmethod
+    def setUpClass(cls):
+        cls.c = pybase.NewClient(zkquorum)
+        cls.families = {
+            cf1: ["oberyn"],
+            cf2: ["one"]
+        }
+        cls.start_values = {
+            cf1: {
+                "oberyn": "\x00\x00\x00\x00\x00\x00\x00\x00",
+            },
+            cf2: {
+                "one": "\x00\x00\x00\x00\x00\x00\x00\x00"
+            }
+        }
+        cls.inc_values = {
+            cf1: {
+                "oberyn": "\x00\x00\x00\x00\x00\x00\x00\x05",
+            },
+            cf2: {
+                "one": "\x00\x00\x00\x00\x00\x00\x00\x08"
+            }
+        }
+        cls.row_prefix = cls.__name__
+        for x in range(6):
+            cls.c.put(table, cls.row_prefix + str(x), cls.start_values)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.c.close()
+
     def test_increment_entire_row(self):
-        pass
+        # TODO: Exists and processed are both false...yet they should be true?
+        rsp = self.c.inc(table, self.row_prefix + "0", self.inc_values)
+        self.assertEqual(result_to_dict(rsp), {
+            cf1: {
+                "oberyn": "\x00\x00\x00\x00\x00\x00\x00\x05",
+            },
+            cf2: {
+                "one": "\x00\x00\x00\x00\x00\x00\x00\x08"
+            }
+        })
+        rsp = self.c.get(table, self.row_prefix + "0", self.families)
+        self.assertEqual(result_to_dict(rsp), {
+            cf1: {
+                "oberyn": "\x00\x00\x00\x00\x00\x00\x00\x05",
+            },
+            cf2: {
+                "one": "\x00\x00\x00\x00\x00\x00\x00\x08"
+            }
+        })
+        rsp = self.c.inc(table, self.row_prefix + "0", self.inc_values)
+        self.assertEqual(result_to_dict(rsp), {
+            cf1: {
+                "oberyn": "\x00\x00\x00\x00\x00\x00\x00\n",
+            },
+            cf2: {
+                "one": "\x00\x00\x00\x00\x00\x00\x00\x10"
+            }
+        })
+        rsp = self.c.get(table, self.row_prefix + "0", self.families)
+        self.assertEqual(result_to_dict(rsp), {
+            cf1: {
+                "oberyn": "\x00\x00\x00\x00\x00\x00\x00\n",
+            },
+            cf2: {
+                "one": "\x00\x00\x00\x00\x00\x00\x00\x10"
+            }
+        })
 
     def test_increment_specific_cell(self):
-        pass
-
-    def test_increment_nonexistent_cell(self):
-        pass
-
-    def test_increment_bad_cell(self):
-        pass
+        new_values = {
+            cf1: {
+                "oberyn": "\x00\x00\x00\x00\x00\x00\x00\x05"
+            }
+        }
+        new_families = {
+            cf1: ["oberyn"]
+        }
+        rsp = self.c.inc(table, self.row_prefix + "1", new_values)
+        self.assertEqual(result_to_dict(rsp), {
+            cf1: {
+                "oberyn": "\x00\x00\x00\x00\x00\x00\x00\x05",
+            }
+        })
+        rsp = self.c.get(table, self.row_prefix + "1", new_families)
+        self.assertEqual(result_to_dict(rsp), {
+            cf1: {
+                "oberyn": "\x00\x00\x00\x00\x00\x00\x00\x05",
+            }
+        })
+        rsp = self.c.inc(table, self.row_prefix + "1", new_values)
+        self.assertEqual(result_to_dict(rsp), {
+            cf1: {
+                "oberyn": "\x00\x00\x00\x00\x00\x00\x00\n",
+            }
+        })
+        rsp = self.c.get(table, self.row_prefix + "1", new_families)
+        self.assertEqual(result_to_dict(rsp), {
+            cf1: {
+                "oberyn": "\x00\x00\x00\x00\x00\x00\x00\n",
+            }
+        })
 
     def test_increment_bad_column_family(self):
-        pass
+        new_values = {
+            "hodor": {
+                "oberyn": "\x00\x00\x00\x00\x00\x00\x00\x05"
+            }
+        }
+        # TODO: Throwing RuntimeError: java.io.IOException when it should be throwing
+        #       column family exception.
+        try:
+            rsp = self.c.inc(table, self.row_prefix + "2", new_values)
+            self.assertEqual(1, 0)
+        except RuntimeError:
+            pass
 
-    def test_increment_bad_column_qualifier(self):
-        pass
-
-
-class TestAvailability(unittest.TestCase):
-
-    # Confirms all the necessary data is there. If this test fails then
-    # something's wrong.
-    def test_should_always_pass(self):
-        pass
-
-    def test_launch_new_region_servers(self):
-        pass
-
-    def test_kill_region_server(self):
-        pass
-
-    def test_kill_master_server(self):
-        pass
-
-    def test_kill_zookeeper(self):
-        pass
-
-    def test_region_server_musical_chairs(self):
-        pass
+    def test_increment_new_column_qualifier(self):
+        new_values = {
+            cf1: {
+                "shodor": "\x00\x00\x00\x00\x00\x00\x00\x05"
+            }
+        }
+        new_families = {
+            cf1: ["shodor"]
+        }
+        rsp = self.c.delete(table, self.row_prefix + "3", new_values)
+        self.assertTrue(rsp.processed)
+        # So this was a fun bug to track down. The problem was that every now
+        # and then the below c.get call would return an empty cell list. But
+        # how is that possible? We just did an append there! Well we also just
+        # did a delete. So why did c.delete -> c.append -> empty cell? Because
+        # HBase doesn't actually delete data, it just sets a timestamp based
+        # tombstone on a cell that says all versions older than this timestamp
+        # are to be deleted (then the next major compaction will remove all
+        # tombstoned cells). Why does this matter? Well the delete came in at
+        # millisecond X and set a tombstone saying delete everything equal to
+        # or older than X. Then less than a millisecond later the append came
+        # in also at millisecond X and set a value with timestamp millisecond
+        # X. The append thinks everything's dandy but when I then do a get it
+        # automatically filters out tombstoned cells and wallah, empty result
+        # set. Solution? Sleep for a millisecond. It should only be an issue on
+        # localhost and is HBase's fault, not mine (this client's too fast for
+        # it's own good!)
+        sleep(0.001)
+        rsp2 = self.c.inc(table, self.row_prefix + "3", new_values)
+        self.assertEqual(result_to_dict(rsp2), {
+            cf1: {
+                "shodor": "\x00\x00\x00\x00\x00\x00\x00\x05",
+            }
+        })
+        rsp = self.c.get(table, self.row_prefix + "3", new_families)
+        self.assertEqual(result_to_dict(rsp), {
+            cf1: {
+                "shodor": "\x00\x00\x00\x00\x00\x00\x00\x05",
+            }
+        })
+        rsp = self.c.inc(table, self.row_prefix + "3", new_values)
+        self.assertEqual(result_to_dict(rsp), {
+            cf1: {
+                "shodor": "\x00\x00\x00\x00\x00\x00\x00\n",
+            }
+        })
+        rsp = self.c.get(table, self.row_prefix + "3", new_families)
+        self.assertEqual(result_to_dict(rsp), {
+            cf1: {
+                "shodor": "\x00\x00\x00\x00\x00\x00\x00\n",
+            }
+        })
 
 
 def result_to_dict(res):
@@ -466,6 +595,7 @@ def result_to_dict(res):
     for cell in res.flatten_cells():
         hodor[cell.family][cell.qualifier] = cell.value
     return hodor
+
 
 if __name__ == '__main__':
     unittest.main()

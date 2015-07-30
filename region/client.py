@@ -5,6 +5,7 @@ from ..pb.Client_pb2 import GetResponse, MutateResponse, ScanResponse
 from ..helpers import varint
 from threading import Lock, Condition
 import logging
+from time import sleep
 logger = logging.getLogger('pybase.' + __name__)
 logger.setLevel(logging.DEBUG)
 
@@ -144,10 +145,33 @@ class Client:
             return self._bad_call_id(call_id, request_type, header.call_id, full_data)
 
         elif header.exception.exception_class_name != u'':
-            # Means a remote exception has happened.
-            if header.exception.exception_class_name == 'org.apache.hadoop.hbase.regionserver.NoSuchColumnFamilyException':
+            # If we're in here it means a remote exception has happened.
+            exception_class = header.exception.exception_class_name
+            if exception_class == 'org.apache.hadoop.hbase.regionserver.NoSuchColumnFamilyException' or exception_class == "java.io.IOException":
                 err_type = ValueError
                 err_msg = "Invalid column family specified"
+            elif exception_class == 'org.apache.hadoop.hbase.exceptions.RegionMovedException':
+                # We could technically parse the remote exception trace for
+                # "Region moved to: hostname=172.31.17.137 port=16202
+                # startCode=1438207586942" and reroute the request. But the
+                # logic to update the caches, check for existing clients,
+                # create new clients, etc would get rather convoluted if done
+                # here. Instead we'll raise this error which will be caught
+                # higher up where it's much easier to do so.
+                err_type = LookupError
+                err_msg = "Region moved to a new Region Server"
+            elif exception_class == 'org.apache.hadoop.hbase.NotServingRegionException':
+                # I don't really know what to do here honestly. We're in the
+                # right region server but the region is offline for whatever
+                # reason. I'm going to assume it's in the middle of a
+                # move/split so we're going to sleep for a second then
+                # propogate an exception upwards (which should then be caught
+                # and the request retried).
+                sleep(1.0)
+                # I'm running out of distinct built in exceptions, but need to
+                # handle them differently upwards.
+                err_type = IOError
+                err_msg = "Region is not online"
             else:
                 err_type = RuntimeError
                 err_msg = header.exception.exception_class_name
@@ -196,14 +220,21 @@ class Client:
 
 # Creates a new RegionServer client. Creates the socket, initializes the
 # connection and returns an instance of Client.
-def NewClient(host, port):
+def NewClient(host, port, num_retries=5):
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.connect((host, port))
         _send_hello(s)
     except socket.error:
-        raise RuntimeError(
-            "Cannot connect to RegionServer {}:{}".format(host, port))
+
+        if num_retries == 0:
+            raise RuntimeError(
+                "Cannot connect to RegionServer {}:{}".format(host, port))
+        logger.warn("Cannot connect to RegionServer %s:%s. Retrying.", host, str(port))
+        s.close()
+        sleep(1.0)
+        return NewClient(host, port, num_retries=num_retries-1)
+
     return Client(host, port, s)
 
 

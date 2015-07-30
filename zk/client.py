@@ -3,6 +3,7 @@ from kazoo.handlers.threading import KazooTimeoutError
 from kazoo.exceptions import NoNodeError
 from ..pb.ZooKeeper_pb2 import MetaRegionServer
 from struct import unpack
+from time import sleep
 import logging
 logger = logging.getLogger('pybase.' + __name__)
 logger.setLevel(logging.DEBUG)
@@ -13,12 +14,13 @@ znode = "/hbase"
 # LocateMeta takes a string representing the location of the ZooKeeper
 # quorum. It then asks ZK for the location of the MetaRegionServer,
 # returning a tuple containing (host_name, port).
-def LocateMeta(zkquorum, timeout=5):
+def LocateMeta(zkquorum, establish_connection_timeout=5, missing_znode_retries=5, zk=None):
 
-    # Using Kazoo for interfacing with ZK
-    zk = KazooClient(hosts=zkquorum)
+    if zk is None:
+        # Using Kazoo for interfacing with ZK
+        zk = KazooClient(hosts=zkquorum)
     try:
-        zk.start(timeout=timeout)
+        zk.start(timeout=establish_connection_timeout)
     except KazooTimeoutError:
         raise RuntimeError(
             "Cannot connect to ZooKeeper at {}".format(zkquorum))
@@ -26,8 +28,13 @@ def LocateMeta(zkquorum, timeout=5):
     try:
         rsp, znodestat = zk.get(znode + "/meta-region-server")
     except NoNodeError:
-        raise RuntimeError(
-            "ZooKeeper does not contain meta-region-server node.")
+        if missing_znode_retries == 0:
+            raise RuntimeError(
+                "ZooKeeper does not contain meta-region-server node.")
+        logger.warn(
+            "ZooKeeper does not contain meta-region-server node. Retrying in 1 second.")
+        sleep(1.0)
+        return LocateMeta(zkquorum, establish_connection_timeout=establish_connection_timeout, missing_znode_retries=missing_znode_retries - 1, zk=zk)
     # We don't need to maintain a connection to ZK. If we need it again we'll
     # recreate the connection. A possible future implementation can subscribe
     # to ZK and listen for when RegionServers go down, then pre-emptively
