@@ -74,6 +74,7 @@ class MainClient:
         self._close_old_regions(overlapping_regions)
         self.region_cache.remove_overlap(start_key, stop_key)
         self.region_cache[start_key:stop_key] = new_region
+        new_region.region_client.regions.append(new_region)
         self._cache_lock.release()
 
 
@@ -89,6 +90,11 @@ class MainClient:
             return a.data
         except KeyError:
             return None
+
+    def _delete_from_region_cache(self, table, start_key):
+        # Don't acquire the lock because the calling function should have done
+        # so already
+        self.region_cache.remove_overlap(table + "," + start_key)
 
 
     """
@@ -149,8 +155,12 @@ class MainClient:
         return self._handle_remote_exceptions(err, dest_region, response, original_increment)
 
 
+    # Scan can get a bit gnarly - be prepared.
     def scan(self, table, start_key='', stop_key=None, families={}, filters=None):
-        if filters:
+        # We convert the filter immediately such that it doesn't have to be done
+        # for every region. However if the filter has already been converted then
+        # we can't convert it again.
+        if filters is not None and type(filters).__name__ != "Filter":
             filters = _to_filter(filters)
         cur_region = self._find_hosting_region(table, start_key)
         response_set = Result(None)
@@ -165,6 +175,7 @@ class MainClient:
                     return self.scan(table, start_key=cur_region.start_key, stop_key=cur_region.stop_key, families=families, filters=filters)
                 region_response_set._append_response(self._handle_remote_exceptions(err, cur_region, response, current_scan))
                 if cur_region.stop_key >= stop_key or cur_region.stop_key == '':
+                    response_set._append_response(region_response_set)
                     break
                 cur_region = self._find_hosting_region(table, cur_region.stop_key)
                 continue
@@ -200,10 +211,14 @@ class MainClient:
     def _handle_remote_exceptions(self, err, rg, response, original_request):
         if err == "RegionServerException":
             # RS is dead. Clear our caches and retry.
-            logger.warn("Region server %s:%s refusing connections. Purging cache.", dest_region.region_client.host, dest_region.region_client.port)
+            logger.warn("Region server %s:%s refusing connections. Purging cache, sleeping, retrying.", rg.region_client.host, rg.region_client.port)
             self._purge_client(rg.region_client)
-            return self.get(table, key, families=families, filters=filters)
-
+            sleep(1.0)
+            return original_request()
+        elif err == "MasterServerException":
+            # Master server be dead. Reestablish and retry.
+            self._recreate_meta_client()
+            return original_request()
         elif err == "MalformedResponseException":
             # Not much we can do here. HBase response failed to parse.
             logger.warn("Remote Exception: Received an invalid message length in the response from HBase.")
@@ -216,15 +231,15 @@ class MainClient:
         elif err == "RegionMovedException":
             logger.warn("Remote Exception: Region moved to a new Region Server.")
             self._purge_region(rg)
-            original_request()
+            return original_request()
 
         elif err == "NotServingRegionException":
             logger.warn("Remote Exception: Region is not online. Retrying after 1 second.")
             self._purge_region(rg)
             sleep(1.0)
-            original_request()
+            return original_request()
         else:
-            raise RuntimeError(err)
+            raise exceptions.PyBaseException(err)
 
 
     """
@@ -243,6 +258,8 @@ class MainClient:
 
 
     def _discover_region(self, table, key):
+        if self.meta_client is None:
+            self._recreate_meta_client()
         meta_key = self._construct_meta_key(table, key)
         meta_rq = request.meta_request(meta_key)
         response, err = self.meta_client._send_request(meta_rq)
@@ -250,6 +267,11 @@ class MainClient:
             # Master is either dead or no longer master. TODO: The region could also just be unavailable.
             logger.warn("Master is either dead or no longer master. Attempting to reestablish.")
             self._recreate_meta_client()
+            response, err = self.meta_client._send_request(meta_rq)
+            if err == "NotServingRegionException":
+                # So...master is screwed up and not serving the meta region
+                # (but ZK claims it's still master). Let's just fail.
+                raise MasterServerException("Master not serving META region.")
             return self._discover_region(table, key)
 
         region, err = self._create_new_region(response, table)
@@ -297,7 +319,7 @@ class MainClient:
         self.meta_client, err = region.NewClient(ip, port)
         if err is not None:
             logger.warn("Cannot reestablish connection to master server")
-            return _recreate_meta_client
+            return self._recreate_meta_client
 
 
 
@@ -307,6 +329,14 @@ class MainClient:
     def _close_old_regions(self, overlapping_region_intervals):
         for reg in overlapping_region_intervals:
             reg.data.region_client.close()
+
+    def _purge_client(self, region_client):
+        self._cache_lock.acquire()
+        for reg in region_client.regions:
+             self._delete_from_region_cache(reg.table, reg.start_key)
+        self.reverse_client_cache.pop(region_client.host + ":" + region_client.port, None)
+        region_client.close()
+        self._cache_lock.release()
 
     def _construct_meta_key(self, table, key):
         return table + "," + key + ",:"

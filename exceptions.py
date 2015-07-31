@@ -1,26 +1,29 @@
-class ZookeeperException(RuntimeError):
+class PyBaseException(Exception):
     pass
 
-class MasterServerException(RuntimeError):
+class ZookeeperException(PyBaseException):
     pass
 
-class RegionServerException(RuntimeError):
+class MasterServerException(PyBaseException):
     pass
 
-class MalformedResponseException(RegionServerException):
+class RegionServerException(PyBaseException):
     pass
 
-class NoSuchColumnFamilyException(LookupError):
+class MalformedResponseException(PyBaseException):
     pass
 
-class NoSuchTableException(LookupError):
-    pass
-    
-class RegionException(LookupError):
+class NoSuchColumnFamilyException(PyBaseException):
     pass
 
-class RegionMovedException(RegionException):
+class NoSuchTableException(PyBaseException):
     pass
 
-class NotServingRegionException(RegionException):
+class RegionException(PyBaseException):
+    pass
+
+class RegionMovedException(PyBaseException):
+    pass
+
+class NotServingRegionException(PyBaseException):
     pass

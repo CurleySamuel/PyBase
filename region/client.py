@@ -59,6 +59,11 @@ class Client:
         self.missed_rpcs = {}
         self.missed_rpcs_lock = Lock()
         self.missed_rpcs_condition = Condition(self.missed_rpcs_lock)
+        # We would like the region client to keep track of the regions that it
+        # hosts. That way if we detect a Region server issue when touching one
+        # region, we can close them all at the same time (saving us a significant
+        # amount of meta lookups).
+        self.regions = []
 
     # Sends an RPC over the wire then calls _receive_rpc and returns the
     # response RPC.
@@ -121,8 +126,7 @@ class Client:
             self.sock_lock.acquire()
             msg_length = self._recv_n(4)
             if msg_length is None:
-                self.sock_lock.release()
-                return None, "MalformedResponseException"
+                return None, "MasterServerException"
             msg_length = unpack(">I", msg_length)[0]
             # The message is then going to be however many bytes the first four
             # bytes specified. We don't want to overread or underread as that'll

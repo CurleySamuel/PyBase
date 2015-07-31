@@ -1,6 +1,7 @@
 import unittest
 import pybase
 from collections import defaultdict
+from pybase.exceptions import *
 import subprocess
 import os
 
@@ -16,6 +17,7 @@ class TestAvailability(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
+        start_region_servers(["1"])
         stop_region_servers(["3", "4", "5"])
         cls.c = pybase.NewClient(zkquorum)
         cls.families = {
@@ -86,7 +88,7 @@ class TestAvailability(unittest.TestCase):
         try:
             rsp = c.scan(table, filters=self.pFilter)
             self.assertEqual(1, 0)
-        except RuntimeError:
+        except ZookeeperException:
             pass
         start_region_servers(["1", "2"])
         stop_region_servers(["3"])
