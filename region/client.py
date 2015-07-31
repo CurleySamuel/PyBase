@@ -71,15 +71,14 @@ class Client:
     #   4. A varint representing the length of the serialized RPC.
     #   5. The serialized RPC.
     #
-    def _send_rpc(self, rpc, request_type):
-        logger.debug(
-            'Sending %s RPC to %s:%s', request_type, self.host, self.port)
+    def _send_request(self, rq):
+        logger.debug('Sending %s RPC to %s:%s', rq.type, self.host, self.port)
         # Serialize the RPC
-        serialized_rpc = rpc.SerializeToString()
+        serialized_rpc = rq.pb.SerializeToString()
 
         header = RequestHeader()
         header.call_id = self.call_id
-        header.method_name = request_type
+        header.method_name = rq.type
         header.request_param = True
         serialized_header = header.SerializeToString()
 
@@ -95,11 +94,11 @@ class Client:
         self.call_id += 1
         try:
             self.sock.send(to_send)
-        except socket.error as serr:
+        except socket.error:
             # RegionServer dead?
-            raise serr
+            return None, "RegionServerException"
         # Message is sent! Now go listen for the results.
-        return self._receive_rpc(self.call_id - 1, request_type)
+        return self._receive_rpc(self.call_id - 1, rq)
 
     # Called after sending an RPC, listens for the response and builds the
     # correct pbResponse object.
@@ -112,7 +111,7 @@ class Client:
     #   4. A varint representing the length of the serialized ResponseMessage.
     #   5. The ResponseMessage.
     #
-    def _receive_rpc(self, call_id, request_type, data=None):
+    def _receive_rpc(self, call_id, rq, data=None):
         # If the field data is populated that means we should process from that
         # instead of the socket.
         full_data = data
@@ -123,8 +122,7 @@ class Client:
             msg_length = self._recv_n(4)
             if msg_length is None:
                 self.sock_lock.release()
-                raise socket.error(
-                    "Received an invalid message length in the response from HBase")
+                return None, "MalformedResponseException"
             msg_length = unpack(">I", msg_length)[0]
             # The message is then going to be however many bytes the first four
             # bytes specified. We don't want to overread or underread as that'll
@@ -142,51 +140,29 @@ class Client:
         if header.call_id != call_id:
             # call_ids don't match? Looks like a different thread nabbed our
             # response.
-            return self._bad_call_id(call_id, request_type, header.call_id, full_data)
-
+            return self._bad_call_id(call_id, rq, header.call_id, full_data)
         elif header.exception.exception_class_name != u'':
             # If we're in here it means a remote exception has happened.
             exception_class = header.exception.exception_class_name
             if exception_class == 'org.apache.hadoop.hbase.regionserver.NoSuchColumnFamilyException' or exception_class == "java.io.IOException":
-                err_type = ValueError
-                err_msg = "Invalid column family specified"
+                return None, "NoSuchColumnFamilyException"
             elif exception_class == 'org.apache.hadoop.hbase.exceptions.RegionMovedException':
-                # We could technically parse the remote exception trace for
-                # "Region moved to: hostname=172.31.17.137 port=16202
-                # startCode=1438207586942" and reroute the request. But the
-                # logic to update the caches, check for existing clients,
-                # create new clients, etc would get rather convoluted if done
-                # here. Instead we'll raise this error which will be caught
-                # higher up where it's much easier to do so.
-                err_type = LookupError
-                err_msg = "Region moved to a new Region Server"
+                return None, "RegionMovedException"
             elif exception_class == 'org.apache.hadoop.hbase.NotServingRegionException':
-                # I don't really know what to do here honestly. We're in the
-                # right region server but the region is offline for whatever
-                # reason. I'm going to assume it's in the middle of a
-                # move/split so we're going to sleep for a second then
-                # propogate an exception upwards (which should then be caught
-                # and the request retried).
-                sleep(1.0)
-                # I'm running out of distinct built in exceptions, but need to
-                # handle them differently upwards.
-                err_type = IOError
-                err_msg = "Region is not online"
+                return None, "NotServingRegionException"
             else:
-                err_type = RuntimeError
-                err_msg = header.exception.exception_class_name
-            raise err_type(err_msg + ". Remote traceback:\n\n%s" %
-                           header.exception.stack_trace)
+                raise RuntimeError(exception_class + ". Remote traceback:\n%s" % header.exception.stack_trace)
         next_pos, pos = decoder(full_data, pos)
-        rpc = response_types[request_type]()
+        rpc = response_types[rq.type]()
         rpc.ParseFromString(full_data[pos: pos + next_pos])
         # The rpc is fully built!
-        return rpc
+        return rpc, None
+
+
 
     def _bad_call_id(self, my_id, my_request, msg_id, data):
         self.missed_rpcs_lock.acquire()
-        logger.info(
-            "Received invalid RPC ID. Got: %s, Expected: %s.", msg_id, my_id)
+        logger.info("Received invalid RPC ID. Got: %s, Expected: %s.", msg_id, my_id)
         self.missed_rpcs[msg_id] = data
         self.missed_rpcs_condition.notifyAll()
         while my_id not in self.missed_rpcs:
@@ -220,22 +196,14 @@ class Client:
 
 # Creates a new RegionServer client. Creates the socket, initializes the
 # connection and returns an instance of Client.
-def NewClient(host, port, num_retries=5):
+def NewClient(host, port):
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.connect((host, port))
+        s.connect((host, int(port)))
         _send_hello(s)
     except socket.error:
-
-        if num_retries == 0:
-            raise RuntimeError(
-                "Cannot connect to RegionServer {}:{}".format(host, port))
-        logger.warn("Cannot connect to RegionServer %s:%s. Retrying.", host, str(port))
-        s.close()
-        sleep(1.0)
-        return NewClient(host, port, num_retries=num_retries-1)
-
-    return Client(host, port, s)
+        return None, True
+    return Client(host, port, s), None
 
 
 # Given an open socket, sends a ConnectionHeader over the wire to
@@ -259,4 +227,3 @@ def _to_varint(val):
     temp = []
     encoder(temp.append, val)
     return "".join(temp)
-

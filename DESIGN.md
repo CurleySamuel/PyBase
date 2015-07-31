@@ -1,5 +1,7 @@
 #HBase, An Enigma
 
+## WARNING: This document is currently outdated due to a major refactor. While the general principles remain the same I vastly simplified the caching process and error handling.
+
 This document aims to be a primer on what happens under the hood in a native HBase client. It's by no means comprehensive and skips over a few of the details but it should give you some insight into the blackbox. While we're on the subject of discarding culpability I should mention that I'm not in fact a HBase wizard - instead I'm just a lowly intern trying to document what I've picked up along the way.
 
 Before we pop open the hood try to get intimate with the following terminology -

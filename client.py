@@ -1,17 +1,14 @@
 import zk.client as zk
 import region.client as region
-from pb.Client_pb2 import GetRequest, MutateRequest, ScanRequest
-from helpers.helpers import families_to_columns, values_to_column_values
-import region.region_info as region_info
+from region.region import region_from_cell
+from request import request
 import logging
 import logging.config
 from intervaltree import IntervalTree
-from collections import defaultdict
-from itertools import chain
 from threading import Lock
-from filters import _to_filter
-from socket import error as sockerr
 from time import sleep
+from itertools import chain
+from filters import _to_filter
 
 # Using a tiered logger such that all submodules propagate through to this
 # logger. Changing the logging level here should affect all other modules.
@@ -40,493 +37,281 @@ logging.config.dictConfig({
     }
 })
 
-
-# Table + Family used when requesting meta information from the
-# MetaRegionServer
-metaTableName = "hbase:meta,,1"
-metaInfoFamily = {"info": []}
-
-
 # This class represents the main Client that will be created by the user.
 # All HBase interaction goes through this client.
 class MainClient:
-    # So far we only need to maintain two class variables:
-    #   - zkquorum represents the location of ZooKeeper
-    #   - meta_client is a client that maintains a persistent connection
-    # to the meta regionserver used to discover regions when we get a cache
-    # miss on our region cache.
-
-    def __init__(self, zkquorum, client):
+    def __init__(self, zkquorum):
         self.zkquorum = zkquorum
         # We need a persistent connection to the meta_client in order to
         # perform any meta lookups in the case that we get a cache miss.
-        self.meta_client = client
-        # Cache 1
+        self.meta_client = None
         # IntervalTree data structure that allows me to create ranges
         # representing known row keys that fall within a specific region. Any
         # 'region look up' is then O(logn)
-        self.region_inf_cache = IntervalTree()
-        # Cache 2
-        # Simple dictionary that takes a known region and maps it to our Client
-        # instance that serves that region (clients serve entire RegionServers,
-        # each of which will serve several regions)
-        self.region_client_cache = {}
-        # Cache 2.5
-        # Opposite of cache 2. Takes a client's host:port as key and maps
-        # it to a tuple (instance of client, a list of regions it serves).
-        # This allows us to 1) When we discover a new region check if we've
-        # already created a Client for that RegionServer and if so, use that
-        # one (otherwise create a new). 2) Keep track of how many known regions
-        # a given Client serves. If we're purging stale region information and
-        # discover a Client no longer tracks any legitimate regions we can
-        # close the client and clear up resources.
-        self.reverse_region_client_cache = defaultdict(lambda: (None, []))
+        self.region_cache = IntervalTree()
+        # Takes a client's host:port as key and maps it to a client instance.
+        self.reverse_client_cache = {}
         # Mutex used for all caching operations.
         self._cache_lock = Lock()
 
-    def _find_hosting_region_client(self, table, key, return_stop=False):
-        # We can probably refactor 'return_stop' out as it's only used for Scan
-        # RPCs (we need to know a region's stopping key to know where to start
-        # scanning next). Leaving the code smell for now.
-        meta_key = self._construct_meta_key(table, key)
-        region_inf = self._get_from_meta_key_to_region_inf_cache(meta_key)
-        if region_inf is None:
-            # We couldn't find the region in our cache.
-            logger.info('Region cache miss! Table: %s, Key: %s', table, key)
-            return self._discover_region(meta_key, return_stop)
-        region_name = region_inf.region_name
-        region_client = self._get_from_region_name_to_region_client_cache(
-            region_name)
-        if region_client is None:
-            logger.warn('Client cache miss! region_name: %s', region_name)
-            # This should very rarely happen. When a region is discovered it's paired with
-            # a RegionClient instance. If we have knowledge of the region but
-            # not the RegionClient hosting it then that's pretty bad.
-            #
-            # TODO: We need to handle this properly but for now just
-            # re-discover the whole region.
-            return self._discover_region(meta_key, return_stop)
-        if return_stop:
-            return region_client, region_name, region_inf.stop_key
-        return region_client, region_name
-
-    # Constructs the string used to query the MetaClient
-    def _construct_meta_key(self, table, key):
-        return table + "," + key + ",:"
-
-    # This function takes a meta_key and queries the MetaClient for the
-    # RegionServer hosting that region.
-    def _discover_region(self, meta_key, return_stop):
-        rq = GetRequest()
-        rq.get.row = meta_key
-        rq.get.column.extend(families_to_columns(metaInfoFamily))
-        rq.get.closest_row_before = True
-        rq.region.type = 1
-        rq.region.value = metaTableName
-        try:
-            rsp = self.meta_client._send_rpc(rq, "Get")
-        except (sockerr, LookupError):
-            # Well this is bad.
-            # Either the master server (meta client) is dead (sockerr), or it's
-            # no longer the master and doesn't hold the meta anymore
-            # (LookupError). Either way need to fall back to ZK.
-            logger.warn(
-                "Master server is either dead or no longer master! Attempting to reestablish.")
-            ip, port = zk.LocateMeta(self.zkquorum)
-            meta_client = region.NewClient(ip, port)
-            self.meta_client.close()
-            self.meta_client = meta_client
-            return self._discover_region(meta_key, return_stop)
-        except IOError:
-            # The region is offline for whatever reason. Lets retry the request.
-            # TODO: Avoid incidental infinite loops.
-            return self._discover_region(meta_key, return_stop)
-        try:
-            client, region_inf = self._create_new_region(rsp)
-        except RuntimeError:
-            # The master server gave us bad information. Let's sleep for half a
-            # second and then retry the query.
-            logger.warn(
-                "Received dead RegionServer information from MasterServer. Retrying in 1 second")
-            sleep(1.0)
-            return self._discover_region(meta_key, return_stop)
-        if return_stop:
-            return client, region_inf.region_name, region_inf.stop_key
-        return client, region_inf.region_name
-
-    # This function takes the result of a MetaQuery, parses it, creates a new
-    # RegionClient if necessary then insert into both caches.
-    def _create_new_region(self, rsp):
-        # Response comes down in different cells, each cell giving different
-        # information. Iterate over them and pull what we need.
-        if len(rsp.result.cell) == 0:
-            raise ValueError("Table does not exist")
-        for cell in rsp.result.cell:
-            if cell.qualifier == "regioninfo":
-                region_inf = region_info.region_info_from_cell(cell)
-            elif cell.qualifier == "server":
-                value = cell.value.split(':')
-                host = value[0]
-                port = int(value[1])
-            else:
-                continue
-        # Check if we already have a client serving this RegionServer
-        client = self.reverse_region_client_cache[host + ":" + str(port)][0]
-        if client is None:
-            logger.info(
-                "Creating new Client for RegionServer %s:%s", host, port)
-            # If we cannot connect to the provided server details then
-            # NewClient will raise a RuntimeError. We'll catch the exception
-            # higher up because we don't have the original request information
-            # here.
-            client = region.NewClient(host, port)
-        # Add to the caches!
-        self._add_to_region_name_to_region_client_cache(
-            region_inf.region_name, client)
-        self._add_to_meta_key_to_region_inf_cache(region_inf)
-        logger.info(
-            "Successfully discovered new region %s", region_inf.region_name)
-        return client, region_inf
-
-    def _add_to_meta_key_to_region_inf_cache(self, region_inf):
-        stop_key = region_inf.stop_key
+    """
+        HERE LAY CACHE OPERATIONS
+    """
+    def _add_to_region_cache(self, new_region):
+        stop_key = new_region.stop_key
         if stop_key == '':
             # This is hacky but our interval tree requires hard interval stops.
             # So what's the largest char out there? chr(255) -> '\xff'. If
             # you're using '\xff' as a prefix for your rows then this'll cause
             # a cache miss on every request.
             stop_key = '\xff'
-        start_key = region_inf.table + ',' + region_inf.start_key
-        stop_key = region_inf.table + ',' + stop_key
-        # We remove any intervals that overlap with our new range (they're
-        # stale data and will cause a HBase region not served error as there
-        # was a split). Before we remove them we want to grab them so we can
-        # remove stale data from the other cache.
+        start_key = new_region.table + ',' + new_region.start_key
+        stop_key = new_region.table + ',' + stop_key
+
         self._cache_lock.acquire()
-        old_regions = self.region_inf_cache[start_key:stop_key]
-        self._purge_old_region_clients(old_regions)
-        self.region_inf_cache.remove_overlap(start_key, stop_key)
-        self.region_inf_cache[start_key:stop_key] = region_inf
+        overlapping_regions = self.region_cache[start_key:stop_key]
+        self._close_old_regions(overlapping_regions)
+        self.region_cache.remove_overlap(start_key, stop_key)
+        self.region_cache[start_key:stop_key] = new_region
         self._cache_lock.release()
 
-    def _get_from_meta_key_to_region_inf_cache(self, meta_key):
+
+
+    def _get_from_region_cache(self, table, key):
         self._cache_lock.acquire()
         # We don't care about the last two characters ',:' in the meta_key.
-        meta_key = meta_key[:-2]
-        regions = self.region_inf_cache[meta_key]
+        meta_key = self._construct_meta_key(table, key)[:-2]
+        regions = self.region_cache[meta_key]
         self._cache_lock.release()
-        if len(regions) == 0:
+        try:
+            a = regions.pop()
+            return a.data
+        except KeyError:
             return None
-        return regions.pop().data
 
-    def _add_to_region_name_to_region_client_cache(self, region_name, region_client):
-        self.region_client_cache[region_name] = region_client
-        key = region_client.host + ":" + str(region_client.port)
-        # Annoying but need to do the below and tuples are immutable -
-        #       "host:port": (None, [])
-        #        -->
-        #       "host:port": (client_instance, [region1])
-        self.reverse_region_client_cache[key][1].append(region_name)
-        self.reverse_region_client_cache[key] = (
-            region_client, self.reverse_region_client_cache[key][1])
 
-    def _get_from_region_name_to_region_client_cache(self, region_name):
-        self._cache_lock.acquire()
-        to_return = None
-        if region_name in self.region_client_cache:
-            to_return = self.region_client_cache[region_name]
-        self._cache_lock.release()
-        return to_return
-
-    def _purge_old_region_clients(self, old):
-        for interval in old:
-            region_name = interval.data.region_name
-            client = self.region_client_cache.pop(region_name, None)
-            if client is not None:
-                key = client.host + ":" + str(client.port)
-                try:
-                    # Be aware that .remove is a O(n) operation where n =
-                    # number of regions in a RegionServer. Not ideal but this
-                    # function should be pretty rare and only really called
-                    # during splits.
-                    self.reverse_region_client_cache[
-                        key][1].remove(region_name)
-                except (KeyError, ValueError):
-                    pass
-                if len(self.reverse_region_client_cache[key][1]) == 0:
-                    client.close()
-                    self.reverse_region_client_cache.pop(key, None)
-
+    """
+        HERE LAY REQUESTS
+    """
     def get(self, table, key, families={}, filters=None):
-        pbFilter = _to_filter(filters)
-
         # Step 1. Figure out where to send it.
-        region_client, region_name = self._find_hosting_region_client(
-            table, key)
-
+        dest_region = self._find_hosting_region(table, key)
         # Step 2. Build the appropriate pb message.
-        rq = GetRequest()
-        rq.get.row = key
-        rq.get.column.extend(families_to_columns(families))
-        rq.region.type = 1
-        rq.region.value = region_name
-        if pbFilter is not None:
-            rq.get.filter.CopyFrom(pbFilter)
-
+        rq = request.get_request(dest_region, key, families, filters)
         # Step 3. Send the message and twiddle our thumbs
-        try:
-            response = region_client._send_rpc(rq, "Get")
-        except sockerr:
-            # Something's bad with the RegionServer. It could be temporary or
-            # permanent but we're going to purge our cache for everything in
-            # that server and ask Meta for more deets.
+        response, err = dest_region.region_client._send_request(rq)
+        if err is None:
+            return Result(response)
+        # Step 4. We have an error.
+        def original_get():
+            return self.get(table, key, families=families, filters=filters)
+        return self._handle_remote_exceptions(err, dest_region, response, original_get)
 
-            # The parameters here are funky. Here's an explanation -
-            #   self._handle_bad_region_server( first, second )
-            #           first : a tuple containing the region_client instance and region_name
-            #           second : a tuple containing:
-            #                           - the name of the function that this call originated from
-            #                           - a list of all the original arguments for this call
-            return self._handle_bad_region_server((region_client, region_name), ("_get", (table, key, families, filters)))
-
-            # Step 4. Profit
-        return Result(response)
-
-    # Little unfortunate we need this function but the region re-establishment
-    # code is generic across all request types. Because requests take
-    # different arguments (some of which are named) this function takes a list
-    # of arguments and calls get with the named arguments properly 'named'
-    def _get(self, table, key, families, filters):
-        return self.get(table, key, families=families, filters=filters)
-
-    def scan(self, table, start_key=None, stop_key=None, families={}, filters=None):
-        pbFilter = _to_filter(filters)
-        return self._scan_helper(table, start_key, stop_key, families, pbFilter, None, Result(None))
-
-    def _scan_helper(self, table, start_key, stop_key, families, filters, scanner_id, partial_result):
-        cells_to_return = []
-        # Create the initial scanner for this region at the specified
-        # start_key.
-        region_client, rq, region_stop_key, region_name = self._scan_build_object(
-            table, start_key, stop_key, families, filters, None, False)
-        try:
-            response = region_client._send_rpc(rq, "Scan")
-            partial_result._append_response(response)
-        except sockerr:
-            return self._handle_bad_region_server((region_client, region_name), (
-                "_scan_helper", (table, start_key, stop_key, families, filters, scanner_id, partial_result)))
-        # Response returns a boolean 'more_results_in_region' which indicates
-        # exactly what you'd think. If it's true then we need to send another
-        # query to the same region with a 'scanner_id' that we got back from
-        # the response. We don't need to include all the other data as that's
-        # persisted across scanner ids.
-        while response.more_results_in_region:
-            # Keep scanning using the scanner_id and append cells until no more
-            # results in region
-            region_client, rq, region_stop_key = self._scan_build_object(
-                table, start_key, None, None, None, response.scanner_id, False)
-            response = region_client._send_rpc(rq, "Scan")
-            partial_result._append_response(response)
-
-        # This region's done. Close the region's scanner.
-        region_client, rq, region_stop_key = self._scan_build_object(
-            table, start_key, None, None, None, response.scanner_id, True)
-        response = region_client._send_rpc(rq, "Scan")
-
-        # Should we move on to the next region?
-        if region_stop_key == '' or (stop_key is not None and region_stop_key > stop_key):
-            return partial_result
-
-        # We should move on!
-        # Recursively keep scanning the next region.
-        # WARNING - Maximum recursion depth is 998. If we're scanning more than
-        # 998 regions then we'll get a stack overflow.
-        # TODO: Don't use recursion.
-        return self._scan_helper(table, region_stop_key, stop_key, families, filters, None, partial_result)
-
-    def _scan_build_object(self, table, start_key, stop_key, families, filters, scanner_id, close):
-        region_client, region_name, region_stop_key = self._find_hosting_region_client(
-            table, start_key or '', return_stop=True)
-        rq = ScanRequest()
-        rq.region.type = 1
-        rq.region.value = region_name
-        # TODO: configurable. Stole 128 from asynchbase
-        rq.number_of_rows = 128
-        if close:
-            rq.close_scanner = close
-        if scanner_id is not None:
-            rq.scanner_id = scanner_id
-            # Don't need to include the other data if we have a scanner_id set.
-            return region_client, rq, region_stop_key
-        rq.scan.column.extend(families_to_columns(families))
-        rq.scan.start_row = start_key or ''
-        if stop_key is not None:
-            rq.scan.stop_row = stop_key
-        if filters is not None:
-            rq.scan.filter.CopyFrom(filters)
-        return region_client, rq, region_stop_key, region_name
-
-    # All mutate requests (PUT/DELETE/APP/INC) require a values field that looks like:
-    #
-    #   {
-    #      "cf1": {
-    #           "mycol": "hodor",
-    #           "mycol2": "alsohodor"
-    #      },
-    #      "cf2": {
-    #           "mycolumn7": 24
-    #      }
-    #   }
-    #
     def put(self, table, key, values):
-        # Step 1
-        region_client, region_name = self._find_hosting_region_client(
-            table, key)
-
-        # Step 2
-        rq = MutateRequest()
-        rq.region.type = 1
-        rq.region.value = region_name
-        rq.mutation.row = key
-        rq.mutation.mutate_type = 2
-        rq.mutation.column_value.extend(values_to_column_values(values))
-
-        # Step 3
-        try:
-            response = region_client._send_rpc(rq, "Mutate")
-        except sockerr:
-            return self._handle_bad_region_server((region_client, region_name), ("put", (table, key, values)))
-
-        # Step 4
-        return Result(response)
+        dest_region = self._find_hosting_region(table, key)
+        rq = request.put_request(dest_region, key, values)
+        response, err = dest_region.region_client._send_request(rq)
+        if err is None:
+            return Result(response)
+        def original_put():
+            return self.put(table, key, values)
+        return self._handle_remote_exceptions(err, dest_region, response, original_put)
 
     def delete(self, table, key, values):
-        # Step 1
-        region_client, region_name = self._find_hosting_region_client(
-            table, key)
+        dest_region = self._find_hosting_region(table, key)
+        rq = request.delete_request(dest_region, key, values)
+        response, err = dest_region.region_client._send_request(rq)
+        if err is None:
+            return Result(response)
+        def original_delete():
+            return self.delete(table, key, values)
+        return self._handle_remote_exceptions(err, dest_region, response, original_delete)
 
-        # Step 2
-        rq = MutateRequest()
-        rq.region.type = 1
-        rq.region.value = region_name
-        rq.mutation.row = key
-        rq.mutation.mutate_type = 3
-        rq.mutation.column_value.extend(
-            values_to_column_values(values, delete=True))
+    def append(self, table, key, values):
+        dest_region = self._find_hosting_region(table, key)
+        rq = request.append_request(dest_region, key, values)
+        response, err = dest_region.region_client._send_request(rq)
+        if err is None:
+            return Result(response)
+        def original_append():
+            return self.append(table, key, values)
+        return self._handle_remote_exceptions(err, dest_region, response, original_append)
 
-        # Step 3
-        try:
-            response = region_client._send_rpc(rq, "Mutate")
-        except sockerr:
-            return self._handle_bad_region_server((region_client, region_name), ("delete", (table, key, values)))
+    def increment(self, table, key, values):
+        dest_region = self._find_hosting_region(table, key)
+        rq = request.increment_request(dest_region, key, values)
+        response, err = dest_region.region_client._send_request(rq)
+        if err is None:
+            return Result(response)
+        def original_increment():
+            return self.increment(table, key, values)
+        return self._handle_remote_exceptions(err, dest_region, response, original_increment)
 
-        # Step 4
-        return Result(response)
 
-    def app(self, table, key, values):
-        # Step 1
-        region_client, region_name = self._find_hosting_region_client(
-            table, key)
+    def scan(self, table, start_key='', stop_key=None, families={}, filters=None):
+        if filters:
+            filters = _to_filter(filters)
+        cur_region = self._find_hosting_region(table, start_key)
+        response_set = Result(None)
+        while True:
+            region_response_set = Result(None)
+            rq = request.scan_request(cur_region, start_key, stop_key, families, filters, False, None)
+            response, err = cur_region.region_client._send_request(rq)
+            if err is not None:
+                def current_scan():
+                    # We want it to only scan this region then return back here. Otherwise we could face a problem where if
+                    # every region misses we now have a stack N recursive calls deep where N is the total number of regions.
+                    return self.scan(table, start_key=cur_region.start_key, stop_key=cur_region.stop_key, families=families, filters=filters)
+                region_response_set._append_response(self._handle_remote_exceptions(err, cur_region, response, current_scan))
+                if cur_region.stop_key >= stop_key or cur_region.stop_key == '':
+                    break
+                cur_region = self._find_hosting_region(table, cur_region.stop_key)
+                continue
+            region_response_set._append_response(response)
+            while response.more_results_in_region:
+                rq = request.scan_request(cur_region, start_key, stop_key, families, filters, False, response.scanner_id)
+                # Getting an error here should be very rare as we've already confirmed the region's running. However we
+                # gotta be comprehensive :(. We're going to handle the region dying in the middle of a scan by tossing out ONLY
+                # this region's partial result and rescanning just this region.
+                response, err = cur_region.region_client._send_request(rq)
+                if err is not None:
+                    def current_scan():
+                        return self.scan(table, start_key=cur_region.start_key, stop_key=cur_region.stop_key, families=families, filters=filters)
+                    region_response_set = Result(None)
+                    region_response_set._append_response(self._handle_remote_exceptions(err, cur_region, response, current_scan))
+                    # Region may have been resized when it went unavailable. We need to re-fetch it so locating the next region
+                    # works as expected.
+                    cur_region = self._find_hosting_region(table, cur_region.start_key)
+                    break
+                else:
+                    response_set._append_response(response)
+            else:
+                rq = request.scan_request(cur_region, start_key, stop_key, families, filters, True, response.scanner_id)
+                response, err = cur_region.region_client._send_request(rq)
+            response_set._append_response(region_response_set)
+            if cur_region.stop_key >= stop_key or cur_region.stop_key == '':
+                break
+            cur_region = self._find_hosting_region(table, cur_region.stop_key)
+        return response_set
 
-        # Step 2
-        rq = MutateRequest()
-        rq.region.type = 1
-        rq.region.value = region_name
-        rq.mutation.row = key
-        rq.mutation.mutate_type = 0
-        rq.mutation.column_value.extend(values_to_column_values(values))
 
-        # Step 3
-        try:
-            response = region_client._send_rpc(rq, "Mutate")
-        except sockerr:
-            return self._handle_bad_region_server((region_client, region_name), ("app", (table, key, values)))
 
-        # Step 4
-        return Result(response)
+    def _handle_remote_exceptions(err, rg, response, original_request):
+        if err == "RegionServerException":
+            # RS is dead. Clear our caches and retry.
+            logger.warn("Region server %s:%s refusing connections. Purging cache.", dest_region.region_client.host, dest_region.region_client.port)
+            self._purge_client(rg.region_client)
+            return self.get(table, key, families=families, filters=filters)
 
-    def inc(self, table, key, values):
-        # Step 1
-        region_client, region_name = self._find_hosting_region_client(
-            table, key)
+        elif err == "MalformedResponseException":
+            # Not much we can do here. HBase response failed to parse.
+            logger.warn("Remote Exception: Received an invalid message length in the response from HBase.")
+            raise exceptions.MalformedResponseException("Received an invalid message length in the response from HBase")
 
-        # Step 2
-        rq = MutateRequest()
-        rq.region.type = 1
-        rq.region.value = region_name
-        rq.mutation.row = key
-        rq.mutation.mutate_type = 1
-        rq.mutation.column_value.extend(values_to_column_values(values))
+        elif err == "NoSuchColumnFamilyException":
+            logger.warn("Remote Exception: Invalid column family specified.")
+            raise exceptions.NoSuchColumnFamilyException("Invalid column family specified")
 
-        # Step 3
-        try:
-            response = region_client._send_rpc(rq, "Mutate")
-        except sockerr:
-            return self._handle_bad_region_server((region_client, region_name), ("inc", (table, key, values)))
+        elif err == "RegionMovedException":
+            logger.warn("Remote Exception: Region moved to a new Region Server.")
+            self._purge_region(rg)
+            original_request()
 
-        # Step 4
-        return Result(response)
+        elif err == "NotServingRegionException":
+            logger.warn("Remote Exception: Region is not online. Retrying after 1 second.")
+            self._purge_region(rg)
+            sleep(1.0)
+            original_request()
+        else:
+            raise RuntimeError(err)
 
-    # TODO: I /think/ this is threadsafe but needs to be tested.
-    #
-    # Pretty much any failed socket operations in the region clients will
-    # cause this puppy to be called. Purges all cache entries that relate to
-    # this region server, closes the client for the server, locates the
-    # request's region's new location, establishes a connection with that
-    # RegionServer if it doesn't exist already and then redoes the request.
-    def _handle_bad_region_server(self, region_tuple, rq_tuple):
-        region_client = region_tuple[0]
-        key = region_client.host + ":" + str(region_client.port)
-        region_name = region_tuple[1]
-        logger.warn(
-            'Issue detected on RegionServer %s for Region %s', key, region_name)
 
-        # Step 1. Grab the cache mutex
-        self._cache_lock.acquire()
+    """
+        HERE LAY REGION AND CLIENT DISCOVERY
+    """
+    def _find_hosting_region(self, table, key):
+        dest_region = self._get_from_region_cache(table, key)
+        if dest_region is None:
+            # We couldn't find the region in our cache.
+            logger.info('Region cache miss! Table: %s, Key: %s', table, key)
+            return self._discover_region(table, key)
+        return dest_region
 
-        # Step 2. Purge the caches of relevant information.
-        # This is our way of removing redundant work. If another thread has
-        # already come in here then they'll have generated a new client and
-        # deleted the old entry.
-        old_client, regions_to_kill = self.reverse_region_client_cache.pop(
-            key, (None, None))
-        if old_client is not None:
-            logger.warn(
-                'Purging all cache entries for RegionServer %s and Region %s', key, region_name)
-            # We're the first! Purge ALL the caches!
-            for region in regions_to_kill:
-                self.region_client_cache.pop(region, None)
-                # Parse the region_name and construct the meta_key for the
-                # start of the region.
-                meta_key = region[:region.rfind(',')]
-                del self.region_inf_cache[meta_key]
 
-            # Step 2.5. Close the client for the RegionServer.
-            old_client.close()
+    def _discover_region(self, table, key):
+        meta_key = self._construct_meta_key(table, key)
+        meta_rq = request.meta_request(meta_key)
+        response, err = self.meta_client._send_request(meta_rq)
+        if err is not None:
+            # Master is either dead or no longer master. TODO: The region could also just be unavailable.
+            logger.warn("Master is either dead or no longer master. Attempting to reestablish.")
+            self._recreate_meta_client()
+            return self._discover_region(table, key)
 
-        # Step 3. Send 'er off again.
-        self._cache_lock.release()
-        func = getattr(self, rq_tuple[0], None)
-        if func is None:
-            raise RuntimeError("this should never happen")
-        # Recall whatever function failed with the original params.
-        return func(*rq_tuple[1])
+        region, err = self._create_new_region(response, table)
+        if err is None:
+            return region
+        # Master gave us bad information. Sleep and retry.
+        logger.warn("Received dead RegionServer information from MasterServer. Retrying in 1 second")
+        sleep(1.0)
+        return self._discover_region(table, key)
 
-    # Closes the client and all region clients, freeing up all file descriptors.
-    #
-    # An unintended side effect of how awesome I am is that the client can
-    # still be used in the future, but the first request after closing will
-    # take some time to reestablish a connection to zk, master server and all
-    # region servers.
+
+    def _create_new_region(self, response, table):
+        cells = response.result.cell
+        # TODO: Check for remote exception here. Specifically 'table does not exist'.
+        for cell in cells:
+            if cell.qualifier == "regioninfo":
+                new_region = region_from_cell(cell)
+            elif cell.qualifier == "server":
+                server_loc = cell.value
+                host, port = cell.value.split(':')
+            else:
+                continue
+        if server_loc in self.reverse_client_cache:
+            new_region.region_client = self.reverse_client_cache[server_loc]
+        else:
+            new_client, err = region.NewClient(host, port)
+            if err is not None:
+                return None, err
+            logger.info("Created new Client for RegionServer %s", server_loc)
+            self.reverse_client_cache[server_loc] = new_client
+            new_region.region_client = new_client
+        self._add_to_region_cache(new_region)
+        logger.info("Successfully discovered new region %s", new_region)
+        return new_region, None
+
+
+
+    def _recreate_meta_client(self):
+        if self.meta_client is not None:
+            self.meta_client.close()
+        ip, port = zk.LocateMeta(self.zkquorum)
+        self.meta_client, err = region.NewClient(ip, port)
+        if err is not None:
+            logger.warn("Cannot reestablish connection to master server")
+            return _recreate_meta_client
+
+
+
+    """
+        HERE LAY THE MISCELLANEOUS
+    """
+    def _close_old_regions(self, overlapping_region_intervals):
+        for reg in overlapping_region_intervals:
+            reg.data.region_client.close()
+
+    def _construct_meta_key(self, table, key):
+        return table + "," + key + ",:"
+
     def close(self):
-        logger.info("Closing main client")
-        self.meta_client.close()
-        self.region_inf_cache.clear()
-        self.region_client_cache = {}
-        for _, tup in self.reverse_region_client_cache.items():
-            if tup[0] is not None:
-                tup[0].close()
-        self.reverse_region_client_cache = defaultdict(lambda: (None, []))
+        logger.info("Main client received close request.")
+        if self.meta_client is not None:
+            self.meta_client.close()
+        self.region_cache.clear()
+        for location, client in self.reverse_client_cache.items():
+            client.close()
+        self.reverse_client_cache = {}
 
 
 class Result:
@@ -553,15 +338,19 @@ class Result:
             return self.cells
 
     def _append_response(self, rsp):
-        self.cells.extend([result.cell for result in rsp.results])
-        self.stale = self.stale or rsp.stale
-
+        try:
+            self.cells.extend([result.cell for result in rsp.results])
+            self.stale = self.stale or rsp.stale
+        except AttributeError as e:
+            # This is a result object we're merging instead.
+            self.cells.extend(rsp.cells)
+            self.stale = self.stale or rsp.stale
 
 # Entrypoint into the whole system. Given a string representing the
 # location of ZooKeeper this function will ask ZK for the location of the
 # meta table and create the region client responsible for future meta
 # lookups (metaclient). Returns an instance of MainClient
-def NewClient(zkquorum, timeout=5):
-    ip, port = zk.LocateMeta(zkquorum, establish_connection_timeout=timeout)
-    meta_client = region.NewClient(ip, port)
-    return MainClient(zkquorum, meta_client)
+def NewClient(zkquorum):
+    a = MainClient(zkquorum)
+    a._recreate_meta_client()
+    return a
