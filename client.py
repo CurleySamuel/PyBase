@@ -9,6 +9,7 @@ from threading import Lock
 from time import sleep
 from itertools import chain
 from filters import _to_filter
+import exceptions
 
 # Using a tiered logger such that all submodules propagate through to this
 # logger. Changing the logging level here should affect all other modules.
@@ -184,19 +185,19 @@ class MainClient:
                     cur_region = self._find_hosting_region(table, cur_region.start_key)
                     break
                 else:
-                    response_set._append_response(response)
+                    region_response_set._append_response(response)
             else:
                 rq = request.scan_request(cur_region, start_key, stop_key, families, filters, True, response.scanner_id)
                 response, err = cur_region.region_client._send_request(rq)
             response_set._append_response(region_response_set)
-            if cur_region.stop_key >= stop_key or cur_region.stop_key == '':
+            if cur_region.stop_key == '' or (stop_key is not None and cur_region.stop_key > stop_key):
                 break
             cur_region = self._find_hosting_region(table, cur_region.stop_key)
         return response_set
 
 
 
-    def _handle_remote_exceptions(err, rg, response, original_request):
+    def _handle_remote_exceptions(self, err, rg, response, original_request):
         if err == "RegionServerException":
             # RS is dead. Clear our caches and retry.
             logger.warn("Region server %s:%s refusing connections. Purging cache.", dest_region.region_client.host, dest_region.region_client.port)
@@ -234,7 +235,10 @@ class MainClient:
         if dest_region is None:
             # We couldn't find the region in our cache.
             logger.info('Region cache miss! Table: %s, Key: %s', table, key)
-            return self._discover_region(table, key)
+            dest_region, err = self._discover_region(table, key)
+            if err is None:
+                return dest_region
+            raise exceptions.NoSuchTableException("Invalid table specified.")
         return dest_region
 
 
@@ -250,7 +254,9 @@ class MainClient:
 
         region, err = self._create_new_region(response, table)
         if err is None:
-            return region
+            return region, None
+        elif err == "NoSuchTableException":
+            return None, err
         # Master gave us bad information. Sleep and retry.
         logger.warn("Received dead RegionServer information from MasterServer. Retrying in 1 second")
         sleep(1.0)
@@ -259,7 +265,8 @@ class MainClient:
 
     def _create_new_region(self, response, table):
         cells = response.result.cell
-        # TODO: Check for remote exception here. Specifically 'table does not exist'.
+        if len(cells) == 0:
+            return None, "NoSuchTableException"
         for cell in cells:
             if cell.qualifier == "regioninfo":
                 new_region = region_from_cell(cell)

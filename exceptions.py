@@ -13,6 +13,9 @@ class MalformedResponseException(RegionServerException):
 class NoSuchColumnFamilyException(LookupError):
     pass
 
+class NoSuchTableException(LookupError):
+    pass
+    
 class RegionException(LookupError):
     pass
 

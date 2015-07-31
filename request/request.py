@@ -82,7 +82,7 @@ def scan_request(region, start_key, stop_key, families, filters, close, scanner_
     if close:
         rq.close_scanner = close
     if scanner_id is not None:
-        rq.scanner_id = scanner_id
+        rq.scanner_id = int(scanner_id)
         return Request("Scan", rq)
     rq.scan.column.extend(families_to_columns(families))
     rq.scan.start_row = start_key

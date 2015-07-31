@@ -2,6 +2,7 @@ import unittest
 import pybase
 from collections import defaultdict
 from time import sleep
+from pybase.exceptions import *
 
 
 # Please note that all below unit tests require the existence of a table
@@ -22,18 +23,17 @@ class TestClient(unittest.TestCase):
 
     def test_new_client_bad(self):
         try:
-            c = pybase.NewClient("badzkquorum", timeout=1)
+            c = pybase.NewClient("badzkquorum")
             self.assertEqual(1, 0)
-        except RuntimeError:
+        except ZookeeperException:
             pass
 
     def test_client_close(self):
         c = pybase.NewClient(zkquorum)
         c.get(table, " ")
         c.close()
-        self.assertEqual(len(c.region_inf_cache), 0)
-        self.assertEqual(c.region_client_cache, {})
-        self.assertEqual(len(c.reverse_region_client_cache), 0)
+        self.assertEqual(len(c.region_cache), 0)
+        self.assertEqual(len(c.reverse_client_cache), 0)
 
     def test_client_close_then_reuse(self):
         c = pybase.NewClient(zkquorum)
@@ -83,7 +83,7 @@ class TestGet(unittest.TestCase):
         try:
             res = self.c.get("asdasdasd", "plsfail")
             self.assertEqual(1, 0)
-        except ValueError:
+        except NoSuchTableException:
             pass
 
     def test_get_bad_row(self):
@@ -95,7 +95,7 @@ class TestGet(unittest.TestCase):
         try:
             self.c.get(table, self.row_prefix, families=families)
             self.assertEqual(1, 0)
-        except ValueError:
+        except NoSuchColumnFamilyException:
             pass
 
     def test_get_bad_column_qualifier(self):
@@ -162,7 +162,7 @@ class TestPut(unittest.TestCase):
         try:
             self.c.put("hodor", "did it work?", self.values)
             self.assertEqual(1, 0)
-        except ValueError:
+        except NoSuchTableException:
             pass
 
     def test_put_malformed_values(self):
@@ -177,7 +177,7 @@ class TestPut(unittest.TestCase):
         values = {"bad_cf": {"yarr": "jabooty"}}
         try:
             self.c.put(table, self.row_prefix + "4", values)
-        except ValueError:
+        except NoSuchColumnFamilyException:
             pass
 
 
@@ -236,7 +236,7 @@ class TestScan(unittest.TestCase):
         try:
             rsp = self.c.scan(table, filters=self.pFilter, families=fam)
             self.assertEqual(1, 0)
-        except ValueError:
+        except NoSuchColumnFamilyException:
             pass
 
     def test_scan_with_bad_column_qualifier(self):
@@ -318,7 +318,7 @@ class TestDelete(unittest.TestCase):
         try:
             rsp = self.c.delete(table, self.row_prefix + "2", value)
             self.assertEqual(0, 1)
-        except ValueError:
+        except NoSuchColumnFamilyException:
             pass
 
     def test_delete_bad_column_qualifier(self):
@@ -361,7 +361,7 @@ class TestAppend(unittest.TestCase):
         cls.c.close()
 
     def test_append_entire_row(self):
-        rsp = self.c.app(table, self.row_prefix + "0", self.values)
+        rsp = self.c.append(table, self.row_prefix + "0", self.values)
         rspd = result_to_dict(rsp)
         self.assertEqual(rspd[cf1], {'oberyn': 'is theis the'})
         self.assertEqual(rspd[cf2], {'one': 'true kingtrue king'})
@@ -376,7 +376,7 @@ class TestAppend(unittest.TestCase):
                 "oberyn": " append!"
             }
         }
-        rsp = self.c.app(table, self.row_prefix + "1", values)
+        rsp = self.c.append(table, self.row_prefix + "1", values)
         rspd = result_to_dict(rsp)
         self.assertEqual(rspd[cf1], {'oberyn': 'is the append!'})
         rsp = self.c.get(table, self.row_prefix + "1", self.families)
@@ -386,7 +386,7 @@ class TestAppend(unittest.TestCase):
 
     def test_append_bad_row(self):
         rsp = self.c.delete(table, self.row_prefix + "2", self.values)
-        rsp = self.c.app(table, self.row_prefix + "2", self.values)
+        rsp = self.c.append(table, self.row_prefix + "2", self.values)
         self.assertFalse(rsp.processed)
         rsp = self.c.get(table, self.row_prefix + "2")
         self.assertEqual(len(rsp.cells), 0)
@@ -398,9 +398,9 @@ class TestAppend(unittest.TestCase):
             }
         }
         try:
-            rsp = self.c.app(table, self.row_prefix + "3", values)
+            rsp = self.c.append(table, self.row_prefix + "3", values)
             self.assertEqual(1, 0)
-        except RuntimeError:
+        except NoSuchColumnFamilyException:
             pass
 
     def test_append_bad_column_qualifier(self):
@@ -410,7 +410,7 @@ class TestAppend(unittest.TestCase):
             }
         }
         rsp = self.c.delete(table, self.row_prefix + "4", values)
-        rsp = self.c.app(table, self.row_prefix + "4", values)
+        rsp = self.c.append(table, self.row_prefix + "4", values)
         self.assertFalse(rsp.processed)
         rsp = self.c.get(table, self.row_prefix + "4")
         self.assertEqual(len(rsp.flatten_cells()), 2)
@@ -451,7 +451,7 @@ class TestIncrement(unittest.TestCase):
 
     def test_increment_entire_row(self):
         # TODO: Exists and processed are both false...yet they should be true?
-        rsp = self.c.inc(table, self.row_prefix + "0", self.inc_values)
+        rsp = self.c.increment(table, self.row_prefix + "0", self.inc_values)
         self.assertEqual(result_to_dict(rsp), {
             cf1: {
                 "oberyn": "\x00\x00\x00\x00\x00\x00\x00\x05",
@@ -469,7 +469,7 @@ class TestIncrement(unittest.TestCase):
                 "one": "\x00\x00\x00\x00\x00\x00\x00\x08"
             }
         })
-        rsp = self.c.inc(table, self.row_prefix + "0", self.inc_values)
+        rsp = self.c.increment(table, self.row_prefix + "0", self.inc_values)
         self.assertEqual(result_to_dict(rsp), {
             cf1: {
                 "oberyn": "\x00\x00\x00\x00\x00\x00\x00\n",
@@ -497,7 +497,7 @@ class TestIncrement(unittest.TestCase):
         new_families = {
             cf1: ["oberyn"]
         }
-        rsp = self.c.inc(table, self.row_prefix + "1", new_values)
+        rsp = self.c.increment(table, self.row_prefix + "1", new_values)
         self.assertEqual(result_to_dict(rsp), {
             cf1: {
                 "oberyn": "\x00\x00\x00\x00\x00\x00\x00\x05",
@@ -509,7 +509,7 @@ class TestIncrement(unittest.TestCase):
                 "oberyn": "\x00\x00\x00\x00\x00\x00\x00\x05",
             }
         })
-        rsp = self.c.inc(table, self.row_prefix + "1", new_values)
+        rsp = self.c.increment(table, self.row_prefix + "1", new_values)
         self.assertEqual(result_to_dict(rsp), {
             cf1: {
                 "oberyn": "\x00\x00\x00\x00\x00\x00\x00\n",
@@ -531,9 +531,9 @@ class TestIncrement(unittest.TestCase):
         # TODO: Throwing RuntimeError: java.io.IOException when it should be throwing
         #       column family exception.
         try:
-            rsp = self.c.inc(table, self.row_prefix + "2", new_values)
+            rsp = self.c.increment(table, self.row_prefix + "2", new_values)
             self.assertEqual(1, 0)
-        except RuntimeError:
+        except NoSuchColumnFamilyException:
             pass
 
     def test_increment_new_column_qualifier(self):
@@ -564,7 +564,7 @@ class TestIncrement(unittest.TestCase):
         # localhost and is HBase's fault, not mine (this client's too fast for
         # it's own good!)
         sleep(0.001)
-        rsp2 = self.c.inc(table, self.row_prefix + "3", new_values)
+        rsp2 = self.c.increment(table, self.row_prefix + "3", new_values)
         self.assertEqual(result_to_dict(rsp2), {
             cf1: {
                 "shodor": "\x00\x00\x00\x00\x00\x00\x00\x05",
@@ -576,7 +576,7 @@ class TestIncrement(unittest.TestCase):
                 "shodor": "\x00\x00\x00\x00\x00\x00\x00\x05",
             }
         })
-        rsp = self.c.inc(table, self.row_prefix + "3", new_values)
+        rsp = self.c.increment(table, self.row_prefix + "3", new_values)
         self.assertEqual(result_to_dict(rsp), {
             cf1: {
                 "shodor": "\x00\x00\x00\x00\x00\x00\x00\n",
@@ -599,4 +599,3 @@ def result_to_dict(res):
 
 if __name__ == '__main__':
     unittest.main()
-

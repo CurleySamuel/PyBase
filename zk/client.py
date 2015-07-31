@@ -2,6 +2,7 @@ from kazoo.client import KazooClient
 from kazoo.handlers.threading import KazooTimeoutError
 from kazoo.exceptions import NoNodeError
 from ..pb.ZooKeeper_pb2 import MetaRegionServer
+from ..exceptions import ZookeeperException
 from struct import unpack
 from time import sleep
 import logging
@@ -22,14 +23,14 @@ def LocateMeta(zkquorum, establish_connection_timeout=5, missing_znode_retries=5
     try:
         zk.start(timeout=establish_connection_timeout)
     except KazooTimeoutError:
-        raise RuntimeError(
+        raise ZookeeperException(
             "Cannot connect to ZooKeeper at {}".format(zkquorum))
     # MetaRegionServer information is located at /hbase/meta-region-server
     try:
         rsp, znodestat = zk.get(znode + "/meta-region-server")
     except NoNodeError:
         if missing_znode_retries == 0:
-            raise RuntimeError(
+            raise ZookeeperException(
                 "ZooKeeper does not contain meta-region-server node.")
         logger.warn(
             "ZooKeeper does not contain meta-region-server node. Retrying in 1 second.")
@@ -44,22 +45,22 @@ def LocateMeta(zkquorum, establish_connection_timeout=5, missing_znode_retries=5
     zk.stop()
     if len(rsp) == 0:
         # Empty response is bad.
-        raise RuntimeError("ZooKeeper returned an empty response")
+        raise ZookeeperException("ZooKeeper returned an empty response")
     # The first byte must be \xff and the next four bytes are a little-endian
     # uint32 containing the length of the meta.
     first_byte, meta_length = unpack(">cI", rsp[:5])
     if first_byte != '\xff':
         # Malformed response
-        raise RuntimeError("ZooKeeper returned an invalid response")
+        raise ZookeeperException("ZooKeeper returned an invalid response")
     if meta_length < 1 or meta_length > 65000:
         # Is this really an error?
-        raise RuntimeError("ZooKeeper returned too much meta information")
+        raise ZookeeperException("ZooKeeper returned too much meta information")
     # ZNode data in HBase are serialized protobufs with a four byte magic
     # 'PBUF' prefix.
     magic = unpack(">I", rsp[meta_length + 5:meta_length + 9])[0]
     if magic != 1346524486:
         # 4 bytes: PBUF
-        raise RuntimeError(
+        raise ZookeeperException(
             "ZooKeeper returned an invalid response (are you running a version of HBase supporting Protobufs?)")
     rsp = rsp[meta_length + 9:]
     meta = MetaRegionServer()
@@ -67,4 +68,3 @@ def LocateMeta(zkquorum, establish_connection_timeout=5, missing_znode_retries=5
     logger.info('Discovered MetaClient at %s:%s',
                 meta.server.host_name, meta.server.port)
     return meta.server.host_name, meta.server.port
-
