@@ -26,20 +26,21 @@ NO_OP = 6
 
 class FilterList:
 
-    def __init__(self, operator, filters):
+    def __init__(self, operator, *arg):
         self.filter_type = pbFilter.FilterList
         self.name = filter_path + "FilterList"
         self.operator = operator
         self.filters = []
         try:
-            for incoming_filter in filters:
+            for incoming_filter in arg:
                 self.filters.append(_to_filter(incoming_filter))
         except TypeError:
             # They passed a single filter and not a sequence of filters.
             self.filters.append(_to_filter(filters))
 
-    def add_filter(self, new_filter):
-        self.filters.append(_to_filter(new_filter))
+    def add_filters(self, *arg):
+        for new_filter in arg:
+            self.filters.append(_to_filter(new_filter))
 
 
 class ColumnCountGetFilter:
@@ -460,4 +461,3 @@ def _to_row_range(rr):
         return new
     except Exception:
         raise ValueError("Malformed RowRange provided")
-
