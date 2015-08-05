@@ -50,13 +50,13 @@ rsp = client.get(table, key, families=families)
 #### Get specific cells with a filter
 ```python
 from pybase import filters
-pFilter = filters.NewKeyOnlyFilter(True)
+pFilter = filters.KeyOnlyFilter(True)
 rsp = client.get(table, key, families=families, filters=pFilter)
 ```
 
 #### Scan with a filter
 ```python
-pFilter = filters.NewKeyOnlyFilter(True)
+pFilter = filters.KeyOnlyFilter(True)
 rsp = client.scan(table, filters=pFilter)
 ```
 
