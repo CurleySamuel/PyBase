@@ -57,6 +57,7 @@ class MainClient:
         self.reverse_client_cache = {}
         # Mutex used for all caching operations.
         self._cache_lock = Lock()
+        self._meta_lookup_lock = Lock()
 
     """
         HERE LAY CACHE OPERATIONS
@@ -264,12 +265,18 @@ class MainClient:
     def _find_hosting_region(self, table, key):
         dest_region = self._get_from_region_cache(table, key)
         if dest_region is None:
-            # We couldn't find the region in our cache.
-            logger.info('Region cache miss! Table: %s, Key: %s', table, key)
-            dest_region, err = self._discover_region(table, key)
-            if err is None:
-                return dest_region
-            raise exceptions.NoSuchTableException("Invalid table specified.")
+            # Not ideal that we have to lock every thread.
+            with self._meta_lookup_lock:
+                dest_region = self._get_from_region_cache(table, key)
+                if dest_region is None:
+                    # We couldn't find the region in our cache.
+                    logger.info(
+                        'Region cache miss! Table: %s, Key: %s', table, key)
+                    dest_region, err = self._discover_region(table, key)
+                    if err is None:
+                        return dest_region
+                    raise exceptions.NoSuchTableException(
+                        "Invalid table specified.")
         return dest_region
 
     def _discover_region(self, table, key):
