@@ -123,16 +123,15 @@ class Client:
         if data is None:
             # Total message length is going to be the first four bytes
             # (little-endian uint32)
-            self.sock_lock.acquire()
-            msg_length = self._recv_n(4)
-            if msg_length is None:
-                return None, "MasterServerException"
-            msg_length = unpack(">I", msg_length)[0]
-            # The message is then going to be however many bytes the first four
-            # bytes specified. We don't want to overread or underread as that'll
-            # cause havoc.
-            full_data = self._recv_n(msg_length)
-            self.sock_lock.release()
+            with self.sock_lock:
+                msg_length = self._recv_n(4)
+                if msg_length is None:
+                    return None, "MasterServerException"
+                msg_length = unpack(">I", msg_length)[0]
+                # The message is then going to be however many bytes the first four
+                # bytes specified. We don't want to overread or underread as that'll
+                # cause havoc.
+                full_data = self._recv_n(msg_length)
         # Pass in the full data as well as your current position to the
         # decoder. It'll then return two variables:
         #       - next_pos: The number of bytes of data specified by the varint
@@ -164,16 +163,15 @@ class Client:
         return rpc, None
 
     def _bad_call_id(self, my_id, my_request, msg_id, data):
-        self.missed_rpcs_lock.acquire()
-        logger.info(
-            "Received invalid RPC ID. Got: %s, Expected: %s.", msg_id, my_id)
-        self.missed_rpcs[msg_id] = data
-        self.missed_rpcs_condition.notifyAll()
-        while my_id not in self.missed_rpcs:
-            self.missed_rpcs_condition.wait()
-        new_data = self.missed_rpcs.pop(my_id)
-        logger.info("Another thread found my RPC! RPC ID: %s", my_id)
-        self.missed_rpcs_lock.release()
+        with self.missed_rpcs_lock:
+            logger.info(
+                "Received invalid RPC ID. Got: %s, Expected: %s.", msg_id, my_id)
+            self.missed_rpcs[msg_id] = data
+            self.missed_rpcs_condition.notifyAll()
+            while my_id not in self.missed_rpcs:
+                self.missed_rpcs_condition.wait()
+            new_data = self.missed_rpcs.pop(my_id)
+            logger.info("Another thread found my RPC! RPC ID: %s", my_id)
         return self._receive_rpc(my_id, my_request, data=new_data)
 
     # Receives exactly n bytes from the socket. Will block until n bytes are
@@ -186,7 +184,6 @@ class Client:
                 packet = self.sock.recv(n - len(data))
             except socket.error as serr:
                 # RegionServer looks to be ded.
-                self.sock_lock.release()
                 raise serr
             if not packet:
                 return None

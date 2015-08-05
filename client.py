@@ -73,25 +73,23 @@ class MainClient:
         start_key = new_region.table + ',' + new_region.start_key
         stop_key = new_region.table + ',' + stop_key
 
-        self._cache_lock.acquire()
-        overlapping_regions = self.region_cache[start_key:stop_key]
-        self._close_old_regions(overlapping_regions)
-        self.region_cache.remove_overlap(start_key, stop_key)
-        self.region_cache[start_key:stop_key] = new_region
-        new_region.region_client.regions.append(new_region)
-        self._cache_lock.release()
+        with self._cache_lock:
+            overlapping_regions = self.region_cache[start_key:stop_key]
+            self._close_old_regions(overlapping_regions)
+            self.region_cache.remove_overlap(start_key, stop_key)
+            self.region_cache[start_key:stop_key] = new_region
+            new_region.region_client.regions.append(new_region)
 
     def _get_from_region_cache(self, table, key):
-        self._cache_lock.acquire()
-        # We don't care about the last two characters ',:' in the meta_key.
-        meta_key = self._construct_meta_key(table, key)[:-2]
-        regions = self.region_cache[meta_key]
-        self._cache_lock.release()
-        try:
-            a = regions.pop()
-            return a.data
-        except KeyError:
-            return None
+        with self._cache_lock:
+            # We don't care about the last two characters ',:' in the meta_key.
+            meta_key = self._construct_meta_key(table, key)[:-2]
+            regions = self.region_cache[meta_key]
+            try:
+                a = regions.pop()
+                return a.data
+            except KeyError:
+                return None
 
     def _delete_from_region_cache(self, table, start_key):
         # Don't acquire the lock because the calling function should have done
@@ -292,12 +290,14 @@ class MainClient:
                 "Master is either dead or no longer master. Attempting to reestablish.")
             self._recreate_meta_client()
             if self.meta_client is None:
-                raise exceptions.MasterServerException("Master server is unresponsive.")
+                raise exceptions.MasterServerException(
+                    "Master server is unresponsive.")
             response, err = self.meta_client._send_request(meta_rq)
             if err == "NotServingRegionException":
                 # So...master is screwed up and not serving the meta region
                 # (but ZK claims it's still master). Let's just fail.
-                raise exceptions.MasterServerException("Master not serving META region.")
+                raise exceptions.MasterServerException(
+                    "Master not serving META region.")
             return self._discover_region(table, key)
 
         region, err = self._create_new_region(response, table)
@@ -354,13 +354,12 @@ class MainClient:
             reg.data.region_client.close()
 
     def _purge_client(self, region_client):
-        self._cache_lock.acquire()
-        for reg in region_client.regions:
-            self._delete_from_region_cache(reg.table, reg.start_key)
-        self.reverse_client_cache.pop(
-            region_client.host + ":" + region_client.port, None)
-        region_client.close()
-        self._cache_lock.release()
+        with self._cache_lock:
+            for reg in region_client.regions:
+                self._delete_from_region_cache(reg.table, reg.start_key)
+            self.reverse_client_cache.pop(
+                region_client.host + ":" + region_client.port, None)
+            region_client.close()
 
     def _construct_meta_key(self, table, key):
         return table + "," + key + ",:"
