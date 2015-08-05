@@ -155,18 +155,18 @@ class Client:
             elif exception_class == 'org.apache.hadoop.hbase.NotServingRegionException':
                 return None, "NotServingRegionException"
             else:
-                raise RuntimeError(exception_class + ". Remote traceback:\n%s" % header.exception.stack_trace)
+                raise RuntimeError(
+                    exception_class + ". Remote traceback:\n%s" % header.exception.stack_trace)
         next_pos, pos = decoder(full_data, pos)
         rpc = response_types[rq.type]()
         rpc.ParseFromString(full_data[pos: pos + next_pos])
         # The rpc is fully built!
         return rpc, None
 
-
-
     def _bad_call_id(self, my_id, my_request, msg_id, data):
         self.missed_rpcs_lock.acquire()
-        logger.info("Received invalid RPC ID. Got: %s, Expected: %s.", msg_id, my_id)
+        logger.info(
+            "Received invalid RPC ID. Got: %s, Expected: %s.", msg_id, my_id)
         self.missed_rpcs[msg_id] = data
         self.missed_rpcs_condition.notifyAll()
         while my_id not in self.missed_rpcs:
@@ -231,3 +231,4 @@ def _to_varint(val):
     temp = []
     encoder(temp.append, val)
     return "".join(temp)
+

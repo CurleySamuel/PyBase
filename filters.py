@@ -305,7 +305,7 @@ def _to_filter(orig_filter):
         ft.name = orig_filter.name
         ft2 = orig_filter.filter_type()
         members = [attr for attr in dir(orig_filter) if not callable(
-            attr) and not attr.startswith("__") and attr not in ["name", "filter_type", "add_filter"]]
+            attr) and not attr.startswith("__") and attr not in ["name", "filter_type", "add_filters"]]
         for member in members:
             try:
                 setattr(ft2, member, getattr(orig_filter, member))
@@ -461,3 +461,4 @@ def _to_row_range(rr):
         return new
     except Exception:
         raise ValueError("Malformed RowRange provided")
+

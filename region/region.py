@@ -35,3 +35,4 @@ def region_from_cell(cell):
     start_key = region_info.start_key
     stop_key = region_info.end_key
     return Region(table, region_name, start_key, stop_key)
+
