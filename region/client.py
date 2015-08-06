@@ -6,6 +6,8 @@ from ..helpers import varint
 from threading import Lock, Condition
 import logging
 from time import sleep
+from cStringIO import StringIO
+
 logger = logging.getLogger('pybase.' + __name__)
 logger.setLevel(logging.DEBUG)
 
@@ -178,17 +180,19 @@ class Client:
     # received. If a socket is closed (RegionServer died) then raise an
     # exception that goes all the way back to the main client
     def _recv_n(self, n):
-        data = ''
-        while len(data) < n:
+        partial_str = StringIO()
+        partial_len = 0
+        while partial_len < n:
             try:
-                packet = self.sock.recv(n - len(data))
+                packet = self.sock.recv(n - partial_len)
             except socket.error as serr:
                 # RegionServer looks to be ded.
                 raise serr
             if not packet:
                 return None
-            data += packet
-        return data
+            partial_len += len(packet)
+            partial_str.write(packet)
+        return partial_str.getvalue()
 
     # Do any work to close open file descriptors, etc.
     def close(self):
