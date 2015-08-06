@@ -44,8 +44,9 @@ logging.config.dictConfig({
 
 class MainClient:
 
-    def __init__(self, zkquorum):
+    def __init__(self, zkquorum, pool_size):
         self.zkquorum = zkquorum
+        self.pool_size = pool_size
         # We need a persistent connection to the meta_client in order to
         # perform any meta lookups in the case that we get a cache miss.
         self.meta_client = None
@@ -333,7 +334,8 @@ class MainClient:
         if server_loc in self.reverse_client_cache:
             new_region.region_client = self.reverse_client_cache[server_loc]
         else:
-            new_client, err = region.NewClient(host, port)
+            new_client, err = region.NewClient(
+                host, port, pool_size=self.pool_size)
             if err is not None:
                 return None, err
             logger.info("Created new Client for RegionServer %s", server_loc)
@@ -419,8 +421,8 @@ class Result:
 # lookups (metaclient). Returns an instance of MainClient
 
 
-def NewClient(zkquorum):
-    a = MainClient(zkquorum)
+def NewClient(zkquorum, socket_pool_size=1):
+    a = MainClient(zkquorum, socket_pool_size)
     a._recreate_meta_client()
     return a
 

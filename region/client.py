@@ -35,14 +35,14 @@ class Client:
     #   - call_id: A monotonically increasing int used as a sequence number for rpcs. This way
     #   we can match incoming responses with the rpc that made the request.
 
-    def __init__(self, host, port, sock):
+    def __init__(self, host, port):
         self.host = host
         self.port = port
-        self.sock = sock
-        # Heh. Sock lock.
-        # Used so only one thread can receive an RPC at a given time. Otherwise
-        # RPCs will come down in broken chunks.
-        self.sock_lock = Lock()
+        self.pool_size = 0
+        self.sock_pool = []
+        self.write_lock_pool = []
+        self.read_lock_pool = []
+        self.call_lock = Lock()
         self.call_id = 0
         # This dictionary and associated sync primitives are for when _receive_rpc
         # receives an RPC that isn't theirs. If a thread gets one that isn't
@@ -79,12 +79,12 @@ class Client:
     #   5. The serialized RPC.
     #
     def _send_request(self, rq):
-        logger.debug('Sending %s RPC to %s:%s', rq.type, self.host, self.port)
-        # Serialize the RPC
+        with self.call_lock:
+            my_id = self.call_id
+            self.call_id += 1
         serialized_rpc = rq.pb.SerializeToString()
-
         header = RequestHeader()
-        header.call_id = self.call_id
+        header.call_id = my_id
         header.method_name = rq.type
         header.request_param = True
         serialized_header = header.SerializeToString()
@@ -98,14 +98,17 @@ class Client:
         to_send = pack(">IB", total_length - 4, len(serialized_header))
         to_send += serialized_header + rpc_length_bytes + serialized_rpc
 
-        self.call_id += 1
+        pool_id = my_id % self.pool_size
         try:
-            self.sock.send(to_send)
+            with self.write_lock_pool[pool_id]:
+                logger.debug(
+                    'Sending %s RPC to %s:%s on pool port %s', rq.type, self.host, self.port, pool_id)
+                self.sock_pool[pool_id].send(to_send)
         except socket.error:
             # RegionServer dead?
             return None, "RegionServerException"
         # Message is sent! Now go listen for the results.
-        return self._receive_rpc(self.call_id - 1, rq)
+        return self._receive_rpc(my_id, rq)
 
     # Called after sending an RPC, listens for the response and builds the
     # correct pbResponse object.
@@ -123,17 +126,18 @@ class Client:
         # instead of the socket.
         full_data = data
         if data is None:
+            pool_id = call_id % self.pool_size
             # Total message length is going to be the first four bytes
             # (little-endian uint32)
-            with self.sock_lock:
-                msg_length = self._recv_n(4)
+            with self.read_lock_pool[pool_id]:
+                msg_length = self._recv_n(self.sock_pool[pool_id], 4)
                 if msg_length is None:
                     return None, "MasterServerException"
                 msg_length = unpack(">I", msg_length)[0]
                 # The message is then going to be however many bytes the first four
                 # bytes specified. We don't want to overread or underread as that'll
                 # cause havoc.
-                full_data = self._recv_n(msg_length)
+                full_data = self._recv_n(self.sock_pool[pool_id], msg_length)
         # Pass in the full data as well as your current position to the
         # decoder. It'll then return two variables:
         #       - next_pos: The number of bytes of data specified by the varint
@@ -179,12 +183,12 @@ class Client:
     # Receives exactly n bytes from the socket. Will block until n bytes are
     # received. If a socket is closed (RegionServer died) then raise an
     # exception that goes all the way back to the main client
-    def _recv_n(self, n):
+    def _recv_n(self, sock, n):
         partial_str = StringIO()
         partial_len = 0
         while partial_len < n:
             try:
-                packet = self.sock.recv(n - partial_len)
+                packet = sock.recv(n - partial_len)
             except socket.error as serr:
                 # RegionServer looks to be ded.
                 raise serr
@@ -201,14 +205,20 @@ class Client:
 
 # Creates a new RegionServer client. Creates the socket, initializes the
 # connection and returns an instance of Client.
-def NewClient(host, port):
+def NewClient(host, port, pool_size=5):
+    c = Client(host, port)
     try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.connect((host, int(port)))
-        _send_hello(s)
+        c.pool_size = pool_size
+        for x in range(pool_size):
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.connect((host, int(port)))
+            _send_hello(s)
+            c.sock_pool.append(s)
+            c.read_lock_pool.append(Lock())
+            c.write_lock_pool.append(Lock())
     except socket.error:
         return None, True
-    return Client(host, port, s), None
+    return c, None
 
 
 # Given an open socket, sends a ConnectionHeader over the wire to
