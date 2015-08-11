@@ -334,10 +334,9 @@ class MainClient:
         if server_loc in self.reverse_client_cache:
             new_region.region_client = self.reverse_client_cache[server_loc]
         else:
-            new_client, err = region.NewClient(
-                host, port, pool_size=self.pool_size)
-            if err is not None:
-                return None, err
+            new_client = region.NewClient(host, port, self.pool_size)
+            if new_client is None:
+                return None, True
             logger.info("Created new Client for RegionServer %s", server_loc)
             self.reverse_client_cache[server_loc] = new_client
             new_region.region_client = new_client
@@ -349,8 +348,8 @@ class MainClient:
         if self.meta_client is not None:
             self.meta_client.close()
         ip, port = zk.LocateMeta(self.zkquorum)
-        self.meta_client, err = region.NewClient(ip, port)
-        if err is not None:
+        self.meta_client = region.NewClient(ip, port, self.pool_size)
+        if self.meta_client is None:
             logger.warn("Cannot reestablish connection to master server")
             return self._recreate_meta_client
 
@@ -425,4 +424,3 @@ def NewClient(zkquorum, socket_pool_size=1):
     a = MainClient(zkquorum, socket_pool_size)
     a._recreate_meta_client()
     return a
-

@@ -205,7 +205,7 @@ class Client:
 
 # Creates a new RegionServer client. Creates the socket, initializes the
 # connection and returns an instance of Client.
-def NewClient(host, port, pool_size=5):
+def NewClient(host, port, pool_size):
     c = Client(host, port)
     try:
         c.pool_size = pool_size
@@ -217,8 +217,8 @@ def NewClient(host, port, pool_size=5):
             c.read_lock_pool.append(Lock())
             c.write_lock_pool.append(Lock())
     except socket.error:
-        return None, True
-    return c, None
+        return None
+    return c
 
 
 # Given an open socket, sends a ConnectionHeader over the wire to
@@ -242,4 +242,3 @@ def _to_varint(val):
     temp = []
     encoder(temp.append, val)
     return "".join(temp)
-
