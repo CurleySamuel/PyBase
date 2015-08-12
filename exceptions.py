@@ -1,5 +1,8 @@
 import logging
 from time import sleep
+from threading import Condition, Lock
+from time import time
+from collections import defaultdict
 logger = logging.getLogger('pybase.' + __name__)
 logger.setLevel(logging.DEBUG)
 
@@ -53,11 +56,13 @@ class RegionServerException(PyBaseException):
             concat = self.host + ":" + self.port
             self.region_client = main_client.reverse_client_cache.get(
                 concat, None)
-        if self.region_client is not None:
-            logger.warn("Region server %s:%s refusing connections. Purging cache, sleeping, retrying.",
-                        self.region_client.host, self.region_client.port)
-            main_client._purge_client(self.region_client)
-        sleep(1.0)
+        if _let_one_through(self, self.region_client):
+            if self.region_client is not None:
+                logger.warn("Region server %s:%s refusing connections. Purging cache, sleeping, retrying.",
+                            self.region_client.host, self.region_client.port)
+                main_client._purge_client(self.region_client)
+                _dynamic_sleep(self, self.region_client)
+            _let_all_through(self, self.region_client)
 
 
 # RegionServer stopped (gracefully).
@@ -69,10 +74,12 @@ class RegionServerStoppedException(RegionServerException):
 class MasterServerException(PyBaseException):
 
     def _handle_exception(self, main_client, **kwargs):
-        logger.warn(
-            "Encountered an exception with the Master server. Reestablishing.")
-        main_client._recreate_meta_client()
-        sleep(1.0)
+        if _let_one_through(self, None):
+            logger.warn(
+                "Encountered an exception with the Master server. Sleeping then reestablishing.")
+            _dynamic_sleep(self, None)
+            main_client._recreate_meta_client()
+            _let_all_through(self, None)
 
 
 # Master gave us funky data. Unrecoverable.
@@ -85,8 +92,10 @@ class RegionException(PyBaseException):
 
     def _handle_exception(self, main_client, **kwargs):
         if "dest_region" in kwargs:
-            main_client._purge_region(kwargs["dest_region"])
-            sleep(1.0)
+            if _let_one_through(self, kwargs["dest_region"]):
+                main_client._purge_region(kwargs["dest_region"])
+                _dynamic_sleep(self, kwargs["dest_region"])
+                _let_all_through(self, kwargs["dest_region"])
         else:
             raise self
 
@@ -119,4 +128,65 @@ class MalformedFamilies(PyBaseException):
 
 class MalformedValues(PyBaseException):
     pass
+
+
+# Say 10 greenlets hit the same exception. We only
+# want one greenlet to make progress resolving it
+# while all the others just sit there sleeping.
+# When the exception is resolved, notify everyone
+# to wake up.
+#
+# We bucket exceptions via a dictionary where the
+# key is a tuple formed of (exception_class, XYZ)
+# where XYZ is some exception specific data
+# (usually a region or region client instance)
+_buckets = {}
+_buckets_lock = Lock()
+
+
+def _let_one_through(exception, data):
+    my_tuple = (exception.__class__.__name__, data)
+    with _buckets_lock:
+        if my_tuple in _buckets:
+            # Someone else has hit our exception already.
+            cond = _buckets[my_tuple]
+            cond.acquire()
+            while my_tuple in _buckets:
+                cond.wait()
+            cond.release()
+            return False
+        else:
+            # We're the exception master.
+            _buckets[my_tuple] = Condition(_buckets_lock)
+            return True
+
+
+def _let_all_through(exception, data):
+    my_tuple = (exception.__class__.__name__, data)
+    cond = _buckets.pop(my_tuple)
+    cond.acquire()
+    cond.notifyAll()
+    cond.release()
+
+
+# We want to sleep more and more with every exception retry.
+# If we've passed a timeout period, fail the query.
+_exception_count = defaultdict(lambda: (0, int(time())))
+_max_sleep = 30
+
+
+def _dynamic_sleep(exception, data):
+    my_tuple = (exception.__class__.__name__, data)
+    retries, last_retry = _exception_count[my_tuple]
+    # Previous exceptions could be here! Should we use them
+    # or are they old?
+    if (int(time()) - last_retry) > _max_sleep:
+        # Old!
+        _exception_count.pop(my_tuple)
+        return _dynamic_sleep(exception, data)
+    new_sleep = (retries / 1.5)**2
+    # [0.0, 0.44, 1.77, 4.0, 7.11, 11.11, 16.0, 21.77, 28.44, 36.0]
+    _exception_count[my_tuple] = (retries + 1, int(time()))
+    print "Sleeping for {0:.2f} seconds.".format(new_sleep)
+    sleep(new_sleep)
 
