@@ -147,7 +147,7 @@ class MainClient:
         # we can't convert it again.
         if filters is not None and type(filters).__name__ != "Filter":
             filters = _to_filter(filters)
-        previous_stop_key = stop_key or ''
+        previous_stop_key = start_key
         result_set = Result(None)
         while True:
             first_response, cur_region = self._scan_hit_region_once(
@@ -160,7 +160,7 @@ class MainClient:
                 # for this interval of keys.
                 e._handle_exception(self, dest_region=cur_region)
                 result_set._append_response(self.scan(
-                    table, start_key=cur_region.start_key, stop_key=cur_region.stop_key, families=families, filters=filters))
+                    table, start_key=previous_stop_key, stop_key=cur_region.stop_key, families=families, filters=filters))
                 previous_stop_key = cur_region.stop_key
                 continue
             result_set._append_response(first_response)
@@ -347,4 +347,3 @@ def NewClient(zkquorum, socket_pool_size=1):
     a = MainClient(zkquorum, socket_pool_size)
     a._recreate_meta_client()
     return a
-

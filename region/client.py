@@ -139,7 +139,8 @@ class Client:
                     # The message is then going to be however many bytes the first four
                     # bytes specified. We don't want to overread or underread as that'll
                     # cause havoc.
-                    full_data = self._recv_n(self.sock_pool[pool_id], msg_length)
+                    full_data = self._recv_n(
+                        self.sock_pool[pool_id], msg_length)
                 except socket.error:
                     raise RegionServerException(region_client=self)
         # Pass in the full data as well as your current position to the
@@ -163,8 +164,11 @@ class Client:
                 raise RegionMovedException()
             elif exception_class == 'org.apache.hadoop.hbase.NotServingRegionException':
                 raise NotServingRegionException()
+            elif exception_class == 'org.apache.hadoop.hbase.regionserver.RegionServerStoppedException':
+                raise RegionServerException(region_client=self)
             else:
-                raise PyBaseException(exception_class + ". Remote traceback:\n%s" % header.exception.stack_trace)
+                raise PyBaseException(
+                    exception_class + ". Remote traceback:\n%s" % header.exception.stack_trace)
         next_pos, pos = decoder(full_data, pos)
         rpc = response_types[rq.type]()
         rpc.ParseFromString(full_data[pos: pos + next_pos])
@@ -242,3 +246,4 @@ def _to_varint(val):
     temp = []
     encoder(temp.append, val)
     return "".join(temp)
+
