@@ -1,5 +1,6 @@
 from ..pb.Client_pb2 import GetRequest, MutateRequest, ScanRequest, Column, MutationProto
 from ..filters import _to_filter
+from ..exceptions import MalformedFamilies, MalformedValues
 
 # Table + Family used when requesting meta information from the
 # MetaRegionServer
@@ -117,7 +118,7 @@ def families_to_columns(fam):
             cols.append(c)
         return cols
     except Exception:
-        raise ValueError("Malformed families")
+        raise MalformedFamilies()
 
 
 # Converts a dictionary specifying ColumnFamilys -> Qualifiers -> Values into the protobuf type.
@@ -149,4 +150,4 @@ def values_to_column_values(val, delete=False):
             col_vals.append(cv)
         return col_vals
     except Exception:
-        raise ValueError("Malformed values")
+        raise MalformedValues()

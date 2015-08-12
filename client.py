@@ -9,7 +9,7 @@ from threading import Lock
 from time import sleep
 from itertools import chain
 from filters import _to_filter
-import exceptions
+from exceptions import *
 
 # Using a tiered logger such that all submodules propagate through to this
 # logger. Changing the logging level here should affect all other modules.
@@ -40,8 +40,6 @@ logging.config.dictConfig({
 
 # This class represents the main Client that will be created by the user.
 # All HBase interaction goes through this client.
-
-
 class MainClient:
 
     def __init__(self, zkquorum, pool_size):
@@ -103,65 +101,47 @@ class MainClient:
     """
 
     def get(self, table, key, families={}, filters=None):
-        # Step 1. Figure out where to send it.
-        dest_region = self._find_hosting_region(table, key)
-        # Step 2. Build the appropriate pb message.
-        rq = request.get_request(dest_region, key, families, filters)
-        # Step 3. Send the message and twiddle our thumbs
-        response, err = dest_region.region_client._send_request(rq)
-        if err is None:
+        try:
+            dest_region = None
+            # Step 1. Figure out where to send it.
+            dest_region = self._find_hosting_region(table, key)
+            # Step 2. Build the appropriate pb message.
+            rq = request.get_request(dest_region, key, families, filters)
+            # Step 3. Send the message and twiddle our thumbs
+            response = dest_region.region_client._send_request(rq)
             return Result(response)
-        # Step 4. We have an error.
-
-        def original_get():
+            # Step 4. We have an error.
+        except PyBaseException as e:
+            e._handle_exception(self, dest_region=dest_region)
             return self.get(table, key, families=families, filters=filters)
-        return self._handle_remote_exceptions(err, dest_region, response, original_get)
+
 
     def put(self, table, key, values):
-        dest_region = self._find_hosting_region(table, key)
-        rq = request.put_request(dest_region, key, values)
-        response, err = dest_region.region_client._send_request(rq)
-        if err is None:
-            return Result(response)
-
-        def original_put():
-            return self.put(table, key, values)
-        return self._handle_remote_exceptions(err, dest_region, response, original_put)
+        return self._mutate(table, key, values, request.put_request)
 
     def delete(self, table, key, values):
-        dest_region = self._find_hosting_region(table, key)
-        rq = request.delete_request(dest_region, key, values)
-        response, err = dest_region.region_client._send_request(rq)
-        if err is None:
-            return Result(response)
-
-        def original_delete():
-            return self.delete(table, key, values)
-        return self._handle_remote_exceptions(err, dest_region, response, original_delete)
+        return self._mutate(table, key, values, request.delete_request)
 
     def append(self, table, key, values):
-        dest_region = self._find_hosting_region(table, key)
-        rq = request.append_request(dest_region, key, values)
-        response, err = dest_region.region_client._send_request(rq)
-        if err is None:
-            return Result(response)
-
-        def original_append():
-            return self.append(table, key, values)
-        return self._handle_remote_exceptions(err, dest_region, response, original_append)
+        return self._mutate(table, key, values, request.append_request)
 
     def increment(self, table, key, values):
-        dest_region = self._find_hosting_region(table, key)
-        rq = request.increment_request(dest_region, key, values)
-        response, err = dest_region.region_client._send_request(rq)
-        if err is None:
-            return Result(response)
+        return self._mutate(table, key, values, request.increment_request)
 
-        def original_increment():
-            return self.increment(table, key, values)
-        return self._handle_remote_exceptions(err, dest_region, response, original_increment)
+
+    def _mutate(self, table, key, values, rq_type):
+        try:
+            dest_region = self._find_hosting_region(table, key)
+            rq = rq_type(dest_region, key, values)
+            response = dest_region.region_client._send_request(rq)
+            return Result(response)
+        except PyBaseException as e:
+            e._handle_exception(self, dest_region=dest_region)
+            return self._mutate(table, key, values, rq_type)
+
 
     # Scan can get a bit gnarly - be prepared.
+    # TODO: REFACTOR TO NEW EXCEPTION MODEL
     def scan(self, table, start_key='', stop_key=None, families={}, filters=None):
         # We convert the filter immediately such that it doesn't have to be done
         # for every region. However if the filter has already been converted then
@@ -220,44 +200,6 @@ class MainClient:
             cur_region = self._find_hosting_region(table, cur_region.stop_key)
         return response_set
 
-    def _handle_remote_exceptions(self, err, rg, response, original_request):
-        if err == "RegionServerException":
-            # RS is dead. Clear our caches and retry.
-            logger.warn("Region server %s:%s refusing connections. Purging cache, sleeping, retrying.",
-                        rg.region_client.host, rg.region_client.port)
-            self._purge_client(rg.region_client)
-            sleep(1.0)
-            return original_request()
-        elif err == "MasterServerException":
-            # Master server be dead. Reestablish and retry.
-            self._recreate_meta_client()
-            return original_request()
-        elif err == "MalformedResponseException":
-            # Not much we can do here. HBase response failed to parse.
-            logger.warn(
-                "Remote Exception: Received an invalid message length in the response from HBase.")
-            raise exceptions.MalformedResponseException(
-                "Received an invalid message length in the response from HBase")
-
-        elif err == "NoSuchColumnFamilyException":
-            logger.warn("Remote Exception: Invalid column family specified.")
-            raise exceptions.NoSuchColumnFamilyException(
-                "Invalid column family specified")
-
-        elif err == "RegionMovedException":
-            logger.warn(
-                "Remote Exception: Region moved to a new Region Server.")
-            self._purge_region(rg)
-            return original_request()
-
-        elif err == "NotServingRegionException":
-            logger.warn(
-                "Remote Exception: Region is not online. Retrying after 1 second.")
-            self._purge_region(rg)
-            sleep(1.0)
-            return original_request()
-        else:
-            raise exceptions.PyBaseException(err)
 
     """
         HERE LAY REGION AND CLIENT DISCOVERY
@@ -271,58 +213,32 @@ class MainClient:
                 dest_region = self._get_from_region_cache(table, key)
                 if dest_region is None:
                     # We couldn't find the region in our cache.
-                    logger.info(
-                        'Region cache miss! Table: %s, Key: %s', table, key)
-                    dest_region, err = self._discover_region(table, key)
-                    if err is None:
-                        return dest_region
-                    raise exceptions.NoSuchTableException(
-                        "Invalid table specified.")
+                    logger.info('Region cache miss! Table: %s, Key: %s', table, key)
+                    dest_region = self._discover_region(table, key)
         return dest_region
 
+
     def _discover_region(self, table, key):
-        if self.meta_client is None:
-            self._recreate_meta_client()
         meta_key = self._construct_meta_key(table, key)
         meta_rq = request.meta_request(meta_key)
         try:
-            response, err = self.meta_client._send_request(meta_rq)
+            # This will throw standard Region/RegionServer exceptions.
+            # We need to catch them and convert them to the Master equivalent.
+            response = self.meta_client._send_request(meta_rq)
         except AttributeError:
-            # self.meta_client is None. Set err and fall to standard
-            # error handling below.
-            err = "MasterServerException"
-        if err is not None:
-            # Master is either dead or no longer master. TODO: The region could
-            # also just be unavailable.
-            logger.warn(
-                "Master is either dead or no longer master. Attempting to reestablish.")
-            self._recreate_meta_client()
-            if self.meta_client is None:
-                raise exceptions.MasterServerException(
-                    "Master server is unresponsive.")
-            response, err = self.meta_client._send_request(meta_rq)
-            if err == "NotServingRegionException":
-                # So...master is screwed up and not serving the meta region
-                # (but ZK claims it's still master). Let's just fail.
-                raise exceptions.MasterServerException(
-                    "Master not serving META region.")
-            return self._discover_region(table, key)
+            raise MasterServerException("MetaClient not instantiated.")
+        except RegionServerException:
+            raise MasterServerException("Master dead or unreachable.")
+        except RegionException:
+            raise MasterServerException("Master META region unreachable.")
 
-        region, err = self._create_new_region(response, table)
-        if err is None:
-            return region, None
-        elif err == "NoSuchTableException":
-            return None, err
-        # Master gave us bad information. Sleep and retry.
-        logger.warn(
-            "Received dead RegionServer information from MasterServer. Retrying in 1 second")
-        sleep(1.0)
-        return self._discover_region(table, key)
+        return self._create_new_region(response, table)
+
 
     def _create_new_region(self, response, table):
         cells = response.result.cell
         if len(cells) == 0:
-            return None, "NoSuchTableException"
+            raise NoSuchTableException("Table does not exist.")
         for cell in cells:
             if cell.qualifier == "regioninfo":
                 new_region = region_from_cell(cell)
@@ -336,22 +252,25 @@ class MainClient:
         else:
             new_client = region.NewClient(host, port, self.pool_size)
             if new_client is None:
-                return None, True
+                raise RegionServerException(host=host, port=port)
             logger.info("Created new Client for RegionServer %s", server_loc)
             self.reverse_client_cache[server_loc] = new_client
             new_region.region_client = new_client
         self._add_to_region_cache(new_region)
         logger.info("Successfully discovered new region %s", new_region)
-        return new_region, None
+        return new_region
+
 
     def _recreate_meta_client(self):
         if self.meta_client is not None:
             self.meta_client.close()
         ip, port = zk.LocateMeta(self.zkquorum)
-        self.meta_client = region.NewClient(ip, port, self.pool_size)
-        if self.meta_client is None:
-            logger.warn("Cannot reestablish connection to master server")
-            return self._recreate_meta_client
+        try:
+            self.meta_client = region.NewClient(ip, port, self.pool_size)
+        except RegionServerException:
+            raise MasterServerException("Cannot establish connection to Master.")
+
+
 
     """
         HERE LAY THE MISCELLANEOUS
@@ -368,6 +287,14 @@ class MainClient:
             self.reverse_client_cache.pop(
                 region_client.host + ":" + region_client.port, None)
             region_client.close()
+
+    def _purge_region(self, reg):
+        with self._cache_lock:
+            self._delete_from_region_cache(reg.table, reg.start_key)
+            try:
+                reg.region_client.regions.remove(reg)
+            except ValueError:
+                pass
 
     def _construct_meta_key(self, table, key):
         return table + "," + key + ",:"

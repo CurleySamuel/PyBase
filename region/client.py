@@ -7,6 +7,7 @@ from threading import Lock, Condition
 import logging
 from time import sleep
 from cStringIO import StringIO
+from ..exceptions import *
 
 logger = logging.getLogger('pybase.' + __name__)
 logger.setLevel(logging.DEBUG)
@@ -106,7 +107,7 @@ class Client:
                 self.sock_pool[pool_id].send(to_send)
         except socket.error:
             # RegionServer dead?
-            return None, "RegionServerException"
+            raise RegionServerException(region_client=self)
         # Message is sent! Now go listen for the results.
         return self._receive_rpc(my_id, rq)
 
@@ -130,14 +131,17 @@ class Client:
             # Total message length is going to be the first four bytes
             # (little-endian uint32)
             with self.read_lock_pool[pool_id]:
-                msg_length = self._recv_n(self.sock_pool[pool_id], 4)
-                if msg_length is None:
-                    return None, "MasterServerException"
-                msg_length = unpack(">I", msg_length)[0]
-                # The message is then going to be however many bytes the first four
-                # bytes specified. We don't want to overread or underread as that'll
-                # cause havoc.
-                full_data = self._recv_n(self.sock_pool[pool_id], msg_length)
+                try:
+                    msg_length = self._recv_n(self.sock_pool[pool_id], 4)
+                    if msg_length is None:
+                        raise
+                    msg_length = unpack(">I", msg_length)[0]
+                    # The message is then going to be however many bytes the first four
+                    # bytes specified. We don't want to overread or underread as that'll
+                    # cause havoc.
+                    full_data = self._recv_n(self.sock_pool[pool_id], msg_length)
+                except socket.error:
+                    raise RegionServerException(region_client=self)
         # Pass in the full data as well as your current position to the
         # decoder. It'll then return two variables:
         #       - next_pos: The number of bytes of data specified by the varint
@@ -154,19 +158,18 @@ class Client:
             # If we're in here it means a remote exception has happened.
             exception_class = header.exception.exception_class_name
             if exception_class == 'org.apache.hadoop.hbase.regionserver.NoSuchColumnFamilyException' or exception_class == "java.io.IOException":
-                return None, "NoSuchColumnFamilyException"
+                raise NoSuchColumnFamilyException()
             elif exception_class == 'org.apache.hadoop.hbase.exceptions.RegionMovedException':
-                return None, "RegionMovedException"
+                raise RegionMovedException()
             elif exception_class == 'org.apache.hadoop.hbase.NotServingRegionException':
-                return None, "NotServingRegionException"
+                raise NotServingRegionException()
             else:
-                raise RuntimeError(
-                    exception_class + ". Remote traceback:\n%s" % header.exception.stack_trace)
+                raise PyBaseException(exception_class + ". Remote traceback:\n%s" % header.exception.stack_trace)
         next_pos, pos = decoder(full_data, pos)
         rpc = response_types[rq.type]()
         rpc.ParseFromString(full_data[pos: pos + next_pos])
         # The rpc is fully built!
-        return rpc, None
+        return rpc
 
     def _bad_call_id(self, my_id, my_request, msg_id, data):
         with self.missed_rpcs_lock:
@@ -187,20 +190,17 @@ class Client:
         partial_str = StringIO()
         partial_len = 0
         while partial_len < n:
-            try:
-                packet = sock.recv(n - partial_len)
-            except socket.error as serr:
-                # RegionServer looks to be ded.
-                raise serr
+            packet = sock.recv(n - partial_len)
             if not packet:
-                return None
+                raise socket.error()
             partial_len += len(packet)
             partial_str.write(packet)
         return partial_str.getvalue()
 
     # Do any work to close open file descriptors, etc.
     def close(self):
-        self.sock.close()
+        for sock in self.sock_pool:
+            sock.close()
 
 
 # Creates a new RegionServer client. Creates the socket, initializes the
