@@ -40,6 +40,8 @@ logging.config.dictConfig({
 
 # This class represents the main Client that will be created by the user.
 # All HBase interaction goes through this client.
+
+
 class MainClient:
 
     def __init__(self, zkquorum, pool_size):
@@ -115,7 +117,6 @@ class MainClient:
             e._handle_exception(self, dest_region=dest_region)
             return self.get(table, key, families=families, filters=filters)
 
-
     def put(self, table, key, values):
         return self._mutate(table, key, values, request.put_request)
 
@@ -128,9 +129,9 @@ class MainClient:
     def increment(self, table, key, values):
         return self._mutate(table, key, values, request.increment_request)
 
-
     def _mutate(self, table, key, values, rq_type):
         try:
+            dest_region = None
             dest_region = self._find_hosting_region(table, key)
             rq = rq_type(dest_region, key, values)
             response = dest_region.region_client._send_request(rq)
@@ -139,67 +140,65 @@ class MainClient:
             e._handle_exception(self, dest_region=dest_region)
             return self._mutate(table, key, values, rq_type)
 
-
     # Scan can get a bit gnarly - be prepared.
-    # TODO: REFACTOR TO NEW EXCEPTION MODEL
     def scan(self, table, start_key='', stop_key=None, families={}, filters=None):
         # We convert the filter immediately such that it doesn't have to be done
         # for every region. However if the filter has already been converted then
         # we can't convert it again.
         if filters is not None and type(filters).__name__ != "Filter":
             filters = _to_filter(filters)
-        cur_region = self._find_hosting_region(table, start_key)
-        response_set = Result(None)
+        previous_stop_key = stop_key or ''
+        result_set = Result(None)
         while True:
-            region_response_set = Result(None)
-            rq = request.scan_request(
-                cur_region, start_key, stop_key, families, filters, False, None)
-            response, err = cur_region.region_client._send_request(rq)
-            if err is not None:
-                def current_scan():
-                    # We want it to only scan this region then return back here. Otherwise we could face a problem where if
-                    # every region misses we now have a stack N recursive calls
-                    # deep where N is the total number of regions.
-                    return self.scan(table, start_key=cur_region.start_key, stop_key=cur_region.stop_key, families=families, filters=filters)
-                region_response_set._append_response(
-                    self._handle_remote_exceptions(err, cur_region, response, current_scan))
-                if cur_region.stop_key >= stop_key or cur_region.stop_key == '':
-                    response_set._append_response(region_response_set)
-                    break
-                cur_region = self._find_hosting_region(
-                    table, cur_region.stop_key)
+            first_response, cur_region = self._scan_hit_region_once(
+                previous_stop_key, table, start_key, stop_key, families, filters)
+            try:
+                second_response = self._scan_region_while_more_results(
+                    cur_region, first_response)
+            except PyBaseException as e:
+                # The RS died in the middle of a scan. Lets restart the scan just
+                # for this interval of keys.
+                e._handle_exception(self, dest_region=cur_region)
+                result_set._append_response(self.scan(
+                    table, start_key=cur_region.start_key, stop_key=cur_region.stop_key, families=families, filters=filters))
+                previous_stop_key = cur_region.stop_key
                 continue
-            region_response_set._append_response(response)
-            while response.more_results_in_region:
-                rq = request.scan_request(
-                    cur_region, start_key, stop_key, families, filters, False, response.scanner_id)
-                # Getting an error here should be very rare as we've already confirmed the region's running. However we
-                # gotta be comprehensive :(. We're going to handle the region dying in the middle of a scan by tossing out ONLY
-                # this region's partial result and rescanning just this region.
-                response, err = cur_region.region_client._send_request(rq)
-                if err is not None:
-                    def current_scan():
-                        return self.scan(table, start_key=cur_region.start_key, stop_key=cur_region.stop_key, families=families, filters=filters)
-                    region_response_set = Result(None)
-                    region_response_set._append_response(
-                        self._handle_remote_exceptions(err, cur_region, response, current_scan))
-                    # Region may have been resized when it went unavailable. We need to re-fetch it so locating the next region
-                    # works as expected.
-                    cur_region = self._find_hosting_region(
-                        table, cur_region.start_key)
-                    break
-                else:
-                    region_response_set._append_response(response)
-            else:
-                rq = request.scan_request(
-                    cur_region, start_key, stop_key, families, filters, True, response.scanner_id)
-                response, err = cur_region.region_client._send_request(rq)
-            response_set._append_response(region_response_set)
-            if cur_region.stop_key == '' or (stop_key is not None and cur_region.stop_key > stop_key):
+            result_set._append_response(first_response)
+            result_set._append_response(second_response)
+            previous_stop_key = cur_region.stop_key
+            if previous_stop_key == '' or (stop_key is not None and previous_stop_key > stop_key):
                 break
-            cur_region = self._find_hosting_region(table, cur_region.stop_key)
-        return response_set
+        return result_set
 
+    def _scan_hit_region_once(self, previous_stop_key, table, start_key, stop_key, families, filters):
+        try:
+            cur_region = self._find_hosting_region(
+                table, previous_stop_key)
+        except PyBaseException as e:
+            e._handle_exception(self)
+            return self._scan_hit_region_once(previous_stop_key, table, start_key, stop_key, families, filters)
+        rq = request.scan_request(
+            cur_region, start_key, stop_key, families, filters, False, None)
+        try:
+            response = cur_region.region_client._send_request(rq)
+        except PyBaseException as e:
+            e._handle_exception(self, dest_region=cur_region)
+            return self._scan_hit_region_once(previous_stop_key, table, start_key, stop_key, families, filters)
+        return response, cur_region
+
+    def _scan_region_while_more_results(self, cur_region, response):
+        response_set = Result(None)
+        scanner_id = response.scanner_id
+        rq = request.scan_request(
+            cur_region, None, None, None, None, False, scanner_id)
+        while response.more_results_in_region:
+            response = cur_region.region_client._send_request(rq)
+            response_set._append_response(response)
+        # Now close the scanner.
+        rq = request.scan_request(
+            cur_region, None, None, None, None, True, scanner_id)
+        _ = cur_region.region_client._send_request(rq)
+        return response_set
 
     """
         HERE LAY REGION AND CLIENT DISCOVERY
@@ -213,10 +212,10 @@ class MainClient:
                 dest_region = self._get_from_region_cache(table, key)
                 if dest_region is None:
                     # We couldn't find the region in our cache.
-                    logger.info('Region cache miss! Table: %s, Key: %s', table, key)
+                    logger.info(
+                        'Region cache miss! Table: %s, Key: %s', table, key)
                     dest_region = self._discover_region(table, key)
         return dest_region
-
 
     def _discover_region(self, table, key):
         meta_key = self._construct_meta_key(table, key)
@@ -233,7 +232,6 @@ class MainClient:
             raise MasterServerException("Master META region unreachable.")
 
         return self._create_new_region(response, table)
-
 
     def _create_new_region(self, response, table):
         cells = response.result.cell
@@ -260,7 +258,6 @@ class MainClient:
         logger.info("Successfully discovered new region %s", new_region)
         return new_region
 
-
     def _recreate_meta_client(self):
         if self.meta_client is not None:
             self.meta_client.close()
@@ -268,9 +265,8 @@ class MainClient:
         try:
             self.meta_client = region.NewClient(ip, port, self.pool_size)
         except RegionServerException:
-            raise MasterServerException("Cannot establish connection to Master.")
-
-
+            raise MasterServerException(
+                "Cannot establish connection to Master.")
 
     """
         HERE LAY THE MISCELLANEOUS
@@ -351,3 +347,4 @@ def NewClient(zkquorum, socket_pool_size=1):
     a = MainClient(zkquorum, socket_pool_size)
     a._recreate_meta_client()
     return a
+

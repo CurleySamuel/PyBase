@@ -11,8 +11,8 @@ class PyBaseException(Exception):
     # use this function. Assumes the exception is
     # unrecoverable and thus the _handle method
     # just reraises the exception.
-    def _handle_exception(self, main_clienti, **kwargs):
-        raise self.__class_(self.message)
+    def _handle_exception(self, main_client, **kwargs):
+        raise self.__class__(self.message)
 
 
 # Parent of any exceptions involving Zookeeper
