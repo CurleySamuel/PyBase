@@ -119,6 +119,15 @@ class NotServingRegionException(RegionException):
     pass
 
 
+class RegionOpeningException(RegionException):
+
+    def _handle_exception(self, main_client, **kwargs):
+        if "dest_region" in kwargs:
+            _dynamic_sleep(self, kwargs["dest_region"])
+        else:
+            raise self
+
+
 # The user is looking up a table that doesn't
 # exist. They're silly.
 class NoSuchTableException(PyBaseException):

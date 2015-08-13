@@ -166,6 +166,8 @@ class Client:
                 raise NotServingRegionException()
             elif exception_class == 'org.apache.hadoop.hbase.regionserver.RegionServerStoppedException':
                 raise RegionServerException(region_client=self)
+            elif exception_class == 'org.apache.hadoop.hbase.exceptions.RegionOpeningException':
+                raise RegionOpeningException()
             else:
                 raise PyBaseException(
                     exception_class + ". Remote traceback:\n%s" % header.exception.stack_trace)
