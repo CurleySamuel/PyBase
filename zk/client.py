@@ -45,16 +45,19 @@ def LocateMeta(zkquorum, establish_connection_timeout=5, missing_znode_retries=5
     zk.stop()
     if len(rsp) == 0:
         # Empty response is bad.
-        raise ZookeeperResponseException("ZooKeeper returned an empty response")
+        raise ZookeeperResponseException(
+            "ZooKeeper returned an empty response")
     # The first byte must be \xff and the next four bytes are a little-endian
     # uint32 containing the length of the meta.
     first_byte, meta_length = unpack(">cI", rsp[:5])
     if first_byte != '\xff':
         # Malformed response
-        raise ZookeeperResponseException("ZooKeeper returned an invalid response")
+        raise ZookeeperResponseException(
+            "ZooKeeper returned an invalid response")
     if meta_length < 1 or meta_length > 65000:
         # Is this really an error?
-        raise ZookeeperResponseException("ZooKeeper returned too much meta information")
+        raise ZookeeperResponseException(
+            "ZooKeeper returned too much meta information")
     # ZNode data in HBase are serialized protobufs with a four byte magic
     # 'PBUF' prefix.
     magic = unpack(">I", rsp[meta_length + 5:meta_length + 9])[0]
@@ -68,3 +71,4 @@ def LocateMeta(zkquorum, establish_connection_timeout=5, missing_znode_retries=5
     logger.info('Discovered MetaClient at %s:%s',
                 meta.server.host_name, meta.server.port)
     return meta.server.host_name, meta.server.port
+

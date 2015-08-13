@@ -1,6 +1,6 @@
 import logging
 from time import sleep
-from threading import Condition, Lock, RLock
+from threading import Condition, Lock, RLock, Semaphore
 from time import time
 from collections import defaultdict
 logger = logging.getLogger('pybase.' + __name__)
@@ -83,7 +83,7 @@ class MasterServerException(PyBaseException):
 
     def _handle_exception(self, main_client, **kwargs):
         if _let_one_through(self, None):
-            if self.host == main_client.meta_client.host and self.port == main_client.meta_client.port:
+            if main_client.meta_client is None or (self.host == main_client.meta_client.host and self.port == main_client.meta_client.port):
                 logger.warn(
                     "Encountered an exception with the Master server. Sleeping then reestablishing.")
                 _dynamic_sleep(self, None)
@@ -139,46 +139,45 @@ class MalformedValues(PyBaseException):
     pass
 
 
-# Say 10 greenlets hit the same exception. We only
-# want one greenlet to make progress resolving it
-# while all the others just sit there sleeping.
-# When the exception is resolved, notify everyone
-# to wake up.
-#
-# We bucket exceptions via a dictionary where the
-# key is a tuple formed of (exception_class, XYZ)
-# where XYZ is some exception specific data
-# (usually a region or region client instance)
-_buckets = {}
-_buckets_lock = RLock()
+_buckets = defaultdict(Semaphore)
+_buckets_lock = Lock()
 
 
 def _let_one_through(exception, data):
     my_tuple = (exception.__class__.__name__, data)
-    with _buckets_lock:
-        if my_tuple in _buckets:
-            # Someone else has hit our exception already.
-            # They're the master and already trying to
-            # resolve the exception.
-            cond = _buckets[my_tuple]
-            while my_tuple in _buckets:
-                cond.wait()
-            return False
-        else:
-            # Look at me - I'm the captain now.
-            _buckets[my_tuple] = Condition(_buckets_lock)
-            return True
+    _buckets_lock.acquire()
+    my_sem = _buckets[my_tuple]
+    _buckets_lock.release()
+    if my_sem.acquire(blocking=False):
+        # Look at me - I'm the captain now.
+        return True
+        pass
+    else:
+        # Someone else is already handling
+        # the exception. Sit here until they
+        # release the semaphore.
+        my_sem.acquire()
+        return False
+
 
 def _let_all_through(exception, data):
     my_tuple = (exception.__class__.__name__, data)
-    cond = _buckets.pop(my_tuple)
-    cond.acquire()
-    cond.notifyAll()
-    cond.release()
+    _buckets_lock.acquire()
+    my_sem = _buckets[my_tuple]
+    while not my_sem.acquire(blocking=False):
+        my_sem.release()
+        # ugh.
+        # When we release a semaphore we need this
+        # greenlet (if gevent is being used) to yield
+        # the processor so another greenlet can grab
+        # the now free semaphore.
+        sleep(0)
+    my_sem.release()
+    _buckets_lock.release()
 
 
 # We want to sleep more and more with every exception retry.
-# If we've passed a timeout period, fail the query.
+# TODO: If we've passed a timeout period, fail the query.
 _exception_count = defaultdict(lambda: (0, int(time())))
 _max_sleep = 30
 

@@ -24,7 +24,7 @@ logging.config.dictConfig({
     },
     'handlers': {
         'default': {
-            'level': 'WARN',
+            'level': 'INFO',
             'class': 'logging.StreamHandler',
             'formatter': 'standard'
         }
@@ -32,7 +32,7 @@ logging.config.dictConfig({
     'loggers': {
         '': {
             'handlers': ['default'],
-            'level': 'WARN',
+            'level': 'INFO',
             'propagate': True
         }
     }
@@ -214,7 +214,7 @@ class MainClient:
                 dest_region = self._get_from_region_cache(table, key)
                 if dest_region is None:
                     # We couldn't find the region in our cache.
-                    logger.info(
+                    logger.debug(
                         'Region cache miss! Table: %s, Key: %s', table, key)
                     dest_region = self._discover_region(table, key)
         return dest_region
@@ -227,6 +227,8 @@ class MainClient:
             # We need to catch them and convert them to the Master equivalent.
             response = self.meta_client._send_request(meta_rq)
         except (AttributeError, RegionServerException, RegionException):
+            if self.meta_client is None:
+                raise MasterServerException(None, None)
             raise MasterServerException(
                 self.meta_client.host, self.meta_client.port)
         return self._create_new_region(response, table)

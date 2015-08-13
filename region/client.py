@@ -177,14 +177,16 @@ class Client:
 
     def _bad_call_id(self, my_id, my_request, msg_id, data):
         with self.missed_rpcs_lock:
-            logger.info(
+            logger.debug(
                 "Received invalid RPC ID. Got: %s, Expected: %s.", msg_id, my_id)
             self.missed_rpcs[msg_id] = data
             self.missed_rpcs_condition.notifyAll()
-            while my_id not in self.missed_rpcs:
+            while my_id not in self.missed_rpcs and not self.sock_pool[0].closed:
                 self.missed_rpcs_condition.wait()
+            if self.sock_pool[0].closed:
+                raise RegionServerException(region_client=self)
             new_data = self.missed_rpcs.pop(my_id)
-            logger.info("Another thread found my RPC! RPC ID: %s", my_id)
+            logger.debug("Another thread found my RPC! RPC ID: %s", my_id)
         return self._receive_rpc(my_id, my_request, data=new_data)
 
     # Receives exactly n bytes from the socket. Will block until n bytes are
@@ -205,6 +207,9 @@ class Client:
     def close(self):
         for sock in self.sock_pool:
             sock.close()
+        self.missed_rpcs_condition.acquire()
+        self.missed_rpcs_condition.notifyAll()
+        self.missed_rpcs_condition.release()
 
 
 # Creates a new RegionServer client. Creates the socket, initializes the
