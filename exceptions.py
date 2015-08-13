@@ -102,7 +102,6 @@ class RegionException(PyBaseException):
     def _handle_exception(self, main_client, **kwargs):
         if "dest_region" in kwargs:
             if _let_one_through(self, kwargs["dest_region"]):
-                print "PURGING REGION"
                 main_client._purge_region(kwargs["dest_region"])
                 _dynamic_sleep(self, kwargs["dest_region"])
                 _let_all_through(self, kwargs["dest_region"])
@@ -159,6 +158,8 @@ def _let_one_through(exception, data):
     with _buckets_lock:
         if my_tuple in _buckets:
             # Someone else has hit our exception already.
+            # They're the master and already trying to
+            # resolve the exception.
             cond = _buckets[my_tuple]
             while my_tuple in _buckets:
                 cond.wait()
@@ -167,7 +168,6 @@ def _let_one_through(exception, data):
             # Look at me - I'm the captain now.
             _buckets[my_tuple] = Condition(_buckets_lock)
             return True
-
 
 def _let_all_through(exception, data):
     my_tuple = (exception.__class__.__name__, data)
@@ -195,6 +195,6 @@ def _dynamic_sleep(exception, data):
     new_sleep = (retries / 1.5)**2
     # [0.0, 0.44, 1.77, 4.0, 7.11, 11.11, 16.0, 21.77, 28.44, 36.0]
     _exception_count[my_tuple] = (retries + 1, int(time()))
-    print "Sleeping for {0:.2f} seconds.".format(new_sleep)
+    logger.info("Sleeping for {0:.2f} seconds.".format(new_sleep))
     sleep(new_sleep)
 

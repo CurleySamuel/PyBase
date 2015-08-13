@@ -24,7 +24,7 @@ logging.config.dictConfig({
     },
     'handlers': {
         'default': {
-            'level': 'INFO',
+            'level': 'WARN',
             'class': 'logging.StreamHandler',
             'formatter': 'standard'
         }
@@ -32,7 +32,7 @@ logging.config.dictConfig({
     'loggers': {
         '': {
             'handlers': ['default'],
-            'level': 'INFO',
+            'level': 'WARN',
             'propagate': True
         }
     }
@@ -162,6 +162,8 @@ class MainClient:
                 result_set._append_response(self.scan(
                     table, start_key=previous_stop_key, stop_key=cur_region.stop_key, families=families, filters=filters))
                 previous_stop_key = cur_region.stop_key
+                if previous_stop_key == '' or (stop_key is not None and previous_stop_key > stop_key):
+                    break
                 continue
             result_set._append_response(first_response)
             result_set._append_response(second_response)
