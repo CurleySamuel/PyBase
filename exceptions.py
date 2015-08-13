@@ -1,6 +1,6 @@
 import logging
 from time import sleep
-from threading import Condition, Lock
+from threading import Condition, Lock, RLock
 from time import time
 from collections import defaultdict
 logger = logging.getLogger('pybase.' + __name__)
@@ -58,10 +58,14 @@ class RegionServerException(PyBaseException):
                 concat, None)
         if _let_one_through(self, self.region_client):
             if self.region_client is not None:
-                logger.warn("Region server %s:%s refusing connections. Purging cache, sleeping, retrying.",
-                            self.region_client.host, self.region_client.port)
-                main_client._purge_client(self.region_client)
-                _dynamic_sleep(self, self.region_client)
+                # We need to make sure that a different thread hasn't already
+                # reestablished to this region.
+                loc = self.region_client.host + ":" + self.region_client.port
+                if loc in main_client.reverse_client_cache:
+                    logger.warn("Region server %s:%s refusing connections. Purging cache, sleeping, retrying.",
+                                self.region_client.host, self.region_client.port)
+                    main_client._purge_client(self.region_client)
+                    _dynamic_sleep(self, self.region_client)
             _let_all_through(self, self.region_client)
 
 
@@ -73,13 +77,18 @@ class RegionServerStoppedException(RegionServerException):
 # All Master exceptions inherit from me
 class MasterServerException(PyBaseException):
 
+    def __init__(self, host, port):
+        self.host = host
+        self.port = port
+
     def _handle_exception(self, main_client, **kwargs):
         if _let_one_through(self, None):
-            logger.warn(
-                "Encountered an exception with the Master server. Sleeping then reestablishing.")
-            _dynamic_sleep(self, None)
-            main_client._recreate_meta_client()
-            _let_all_through(self, None)
+            if self.host == main_client.meta_client.host and self.port == main_client.meta_client.port:
+                logger.warn(
+                    "Encountered an exception with the Master server. Sleeping then reestablishing.")
+                _dynamic_sleep(self, None)
+                main_client._recreate_meta_client()
+                _let_all_through(self, None)
 
 
 # Master gave us funky data. Unrecoverable.
@@ -93,6 +102,7 @@ class RegionException(PyBaseException):
     def _handle_exception(self, main_client, **kwargs):
         if "dest_region" in kwargs:
             if _let_one_through(self, kwargs["dest_region"]):
+                print "PURGING REGION"
                 main_client._purge_region(kwargs["dest_region"])
                 _dynamic_sleep(self, kwargs["dest_region"])
                 _let_all_through(self, kwargs["dest_region"])
@@ -141,7 +151,7 @@ class MalformedValues(PyBaseException):
 # where XYZ is some exception specific data
 # (usually a region or region client instance)
 _buckets = {}
-_buckets_lock = Lock()
+_buckets_lock = RLock()
 
 
 def _let_one_through(exception, data):
@@ -150,13 +160,11 @@ def _let_one_through(exception, data):
         if my_tuple in _buckets:
             # Someone else has hit our exception already.
             cond = _buckets[my_tuple]
-            cond.acquire()
             while my_tuple in _buckets:
                 cond.wait()
-            cond.release()
             return False
         else:
-            # We're the exception master.
+            # Look at me - I'm the captain now.
             _buckets[my_tuple] = Condition(_buckets_lock)
             return True
 

@@ -224,13 +224,9 @@ class MainClient:
             # This will throw standard Region/RegionServer exceptions.
             # We need to catch them and convert them to the Master equivalent.
             response = self.meta_client._send_request(meta_rq)
-        except AttributeError:
-            raise MasterServerException("MetaClient not instantiated.")
-        except RegionServerException:
-            raise MasterServerException("Master dead or unreachable.")
-        except RegionException:
-            raise MasterServerException("Master META region unreachable.")
-
+        except (AttributeError, RegionServerException, RegionException):
+            raise MasterServerException(
+                self.meta_client.host, self.meta_client.port)
         return self._create_new_region(response, table)
 
     def _create_new_region(self, response, table):
@@ -265,8 +261,7 @@ class MainClient:
         try:
             self.meta_client = region.NewClient(ip, port, self.pool_size)
         except RegionServerException:
-            raise MasterServerException(
-                "Cannot establish connection to Master.")
+            raise MasterServerException(ip, port)
 
     """
         HERE LAY THE MISCELLANEOUS
@@ -347,3 +342,4 @@ def NewClient(zkquorum, socket_pool_size=1):
     a = MainClient(zkquorum, socket_pool_size)
     a._recreate_meta_client()
     return a
+
