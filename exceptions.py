@@ -65,7 +65,8 @@ class RegionServerException(PyBaseException):
                     logger.warn("Region server %s:%s refusing connections. Purging cache, sleeping, retrying.",
                                 self.region_client.host, self.region_client.port)
                     main_client._purge_client(self.region_client)
-                    _dynamic_sleep(self, self.region_client)
+                    if not _dynamic_sleep(self, self.region_client):
+                        raise self
             _let_all_through(self, self.region_client)
 
 
@@ -86,7 +87,8 @@ class MasterServerException(PyBaseException):
             if main_client.meta_client is None or (self.host == main_client.meta_client.host and self.port == main_client.meta_client.port):
                 logger.warn(
                     "Encountered an exception with the Master server. Sleeping then reestablishing.")
-                _dynamic_sleep(self, None)
+                if not _dynamic_sleep(self, None):
+                    raise self
                 main_client._recreate_meta_client()
                 _let_all_through(self, None)
 
@@ -103,7 +105,8 @@ class RegionException(PyBaseException):
         if "dest_region" in kwargs:
             if _let_one_through(self, kwargs["dest_region"]):
                 main_client._purge_region(kwargs["dest_region"])
-                _dynamic_sleep(self, kwargs["dest_region"])
+                if not _dynamic_sleep(self, kwargs["dest_region"]):
+                    raise self
                 _let_all_through(self, kwargs["dest_region"])
         else:
             raise self
@@ -123,7 +126,8 @@ class RegionOpeningException(RegionException):
 
     def _handle_exception(self, main_client, **kwargs):
         if "dest_region" in kwargs:
-            _dynamic_sleep(self, kwargs["dest_region"])
+            if not _dynamic_sleep(self, kwargs["dest_region"]):
+                raise self
         else:
             raise self
 
@@ -186,23 +190,37 @@ def _let_all_through(exception, data):
 
 
 # We want to sleep more and more with every exception retry.
-# TODO: If we've passed a timeout period, fail the query.
-_exception_count = defaultdict(lambda: (0, int(time())))
-_max_sleep = 30
+def sleep_formula(x): return (x / 1.5)**2
+# [0.0, 0.44, 1.77, 4.0, 7.11, 11.11, 16.0, 21.77, 28.44, 36.0]
+_exception_count = defaultdict(lambda: (0, time()))
+_max_retries = 7
+_max_sleep = sleep_formula(_max_retries)
+_max_aggregate_sleep = reduce(
+    lambda x, y: x + y, map(lambda x: sleep_formula(x), range(_max_retries)))
 
 
 def _dynamic_sleep(exception, data):
     my_tuple = (exception.__class__.__name__, data)
     retries, last_retry = _exception_count[my_tuple]
-    # Previous exceptions could be here! Should we use them
-    # or are they old?
-    if (int(time()) - last_retry) > _max_sleep:
-        # Old!
+    age = time() - last_retry
+    if retries >= _max_retries or age > (_max_sleep * 1.2):
+        # Should we fail or was the last retry a long time ago?
+        # My handwavy answer is if it's been less than half the
+        # time of a max sleep since you last retried, you deserve
+        # to be killed.
+        #
+        # Ex. _max_retries=7. That means you've slept for 40.44
+        # seconds already by the time you hit retries=7. If you
+        # fail again within the next 21.77/2 = 10.9 seconds I'm
+        # going to end you. Otherwise we'll restart the counter.
+        if age < (_max_sleep / 2.0):
+            # You should die.
+            return False
         _exception_count.pop(my_tuple)
         return _dynamic_sleep(exception, data)
-    new_sleep = (retries / 1.5)**2
-    # [0.0, 0.44, 1.77, 4.0, 7.11, 11.11, 16.0, 21.77, 28.44, 36.0]
-    _exception_count[my_tuple] = (retries + 1, int(time()))
+    new_sleep = sleep_formula(retries)
+    _exception_count[my_tuple] = (retries + 1, time())
     logger.info("Sleeping for {0:.2f} seconds.".format(new_sleep))
     sleep(new_sleep)
+    return True
 

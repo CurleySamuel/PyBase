@@ -33,8 +33,8 @@ def LocateMeta(zkquorum, establish_connection_timeout=5, missing_znode_retries=5
             raise ZookeeperZNodeException(
                 "ZooKeeper does not contain meta-region-server node.")
         logger.warn(
-            "ZooKeeper does not contain meta-region-server node. Retrying in 1 second.")
-        sleep(1.0)
+            "ZooKeeper does not contain meta-region-server node. Retrying in 2 seconds. (%s retries remaining)", missing_znode_retries)
+        sleep(2.0)
         return LocateMeta(zkquorum, establish_connection_timeout=establish_connection_timeout, missing_znode_retries=missing_znode_retries - 1, zk=zk)
     # We don't need to maintain a connection to ZK. If we need it again we'll
     # recreate the connection. A possible future implementation can subscribe
