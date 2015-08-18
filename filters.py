@@ -2,6 +2,8 @@ import pb.Filter_pb2 as pbFilter
 import pb.Comparator_pb2 as pbComparator
 from pb.HBase_pb2 import BytesBytesPair as pbBytesBytesPair
 
+# You're brave to venture into this file.
+
 filter_path = "org.apache.hadoop.hbase.filter."
 comparator_path = "org.apache.hadoop.hbase.filter."
 
@@ -24,6 +26,9 @@ GREATER = 5
 NO_OP = 6
 
 
+# A FilterList is also a Filter. But it's also a list of Filters with an
+# operator. This allows you to build up complicated boolean expressions by
+# chaining FilterLists.
 class FilterList:
 
     def __init__(self, operator, *arg):
@@ -290,17 +295,20 @@ class MultiRowRangeFilter:
             self.row_range_list.append(_to_row_range(row_range_list))
 
 
-# Function will take any of the above classes, create the associated pb
+# Instead of having to define a _to_filter method for every filter I
+# instead opted to be hard core and define it once and support every
+# filter.
+#
+# _to_filter will take any of the above classes, create the associated pb
 # type, iterate over any special variables and set them accordingly,
 # serialize the special pb filter type into a standard pb Filter object
 # and return that.
-#
-# Every member variable except 'filter_type' and 'name' will try to be set
-# in the pb filter object.
 def _to_filter(orig_filter):
     if orig_filter is None:
         return None
     try:
+        # ft is a generic Filter type. ft2 is the special Filter type
+        # (MultiRowRangeFilter, etc). You serialize ft2 and stuff it into ft.
         ft = pbFilter.Filter()
         ft.name = orig_filter.name
         ft2 = orig_filter.filter_type()
@@ -317,6 +325,7 @@ def _to_filter(orig_filter):
                 except AttributeError:
                     # Just kidding. It's a composite field.
                     el.CopyFrom(getattr(orig_filter, member))
+        # Serialize ft2 and stuff it into ft. Return ft.
         ft.serialized_filter = ft2.SerializeToString()
         return ft
     except Exception:
