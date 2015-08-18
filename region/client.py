@@ -13,7 +13,6 @@ logger = logging.getLogger('pybase.' + __name__)
 logger.setLevel(logging.DEBUG)
 socket.setdefaulttimeout(2)
 
-
 # Used to encode and decode varints in a format protobuf expects.
 encoder = varint.encodeVarint
 decoder = varint.decodeVarint
@@ -41,9 +40,12 @@ class Client:
         self.host = host
         self.port = port
         self.pool_size = 0
+        # We support connection pools so have lists of sockets and read/write
+        # mutexes on them.
         self.sock_pool = []
         self.write_lock_pool = []
         self.read_lock_pool = []
+        # Why yes, we do have a mutex protecting a single variable.
         self.call_lock = Lock()
         self.call_id = 0
         # This dictionary and associated sync primitives are for when _receive_rpc
@@ -90,7 +92,8 @@ class Client:
         header.method_name = rq.type
         header.request_param = True
         serialized_header = header.SerializeToString()
-
+        # Consult the DESIGN.md for an explanation as to how Send/Receive
+        # messages are composed.
         rpc_length_bytes = _to_varint(len(serialized_rpc))
         total_length = 4 + 1 + \
             len(serialized_header) + \
@@ -178,6 +181,14 @@ class Client:
         # The rpc is fully built!
         return rpc
 
+    # Receive an RPC with incorrect call_id?
+    #       1. Acquire lock
+    #       2. Place raw data into missed_rpcs with key call_id
+    #       3. Notify all other threads to wake up (nothing will happen until you release the lock)
+    #       4. WHILE: Your call_id is not in the dictionary
+    #               4.5  Call wait() on the conditional and get comfy.
+    #       5. Pop your data out
+    #       6. Release the lock
     def _bad_call_id(self, my_id, my_request, msg_id, data):
         with self.missed_rpcs_lock:
             logger.debug(
@@ -212,6 +223,8 @@ class Client:
     def close(self):
         for sock in self.sock_pool:
             sock.close()
+        # We could still have greenlets waiting in the bad_call_id pools! Wake
+        # them up so they can fail to error handling as well.
         self.missed_rpcs_condition.acquire()
         self.missed_rpcs_condition.notifyAll()
         self.missed_rpcs_condition.release()
