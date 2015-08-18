@@ -7,14 +7,15 @@ from ..exceptions import MalformedFamilies, MalformedValues
 metaTableName = "hbase:meta,,1"
 metaInfoFamily = {"info": []}
 
+
 class Request:
 
     def __init__(self, type, pb):
         self.type = type
-        self.pb  = pb
+        self.pb = pb
 
 
-def meta_request(meta_key):
+def master_request(meta_key):
     rq = GetRequest()
     rq.get.row = meta_key
     rq.get.column.extend(families_to_columns(metaInfoFamily))
@@ -52,7 +53,8 @@ def delete_request(region, key, values):
     rq.region.value = region.region_name
     rq.mutation.row = key
     rq.mutation.mutate_type = 3
-    rq.mutation.column_value.extend(values_to_column_values(values, delete=True))
+    rq.mutation.column_value.extend(
+        values_to_column_values(values, delete=True))
     return Request("Mutate", rq)
 
 
@@ -75,6 +77,7 @@ def increment_request(region, key, values):
     rq.mutation.column_value.extend(values_to_column_values(values))
     return Request("Mutate", rq)
 
+
 def scan_request(region, start_key, stop_key, families, filters, close, scanner_id):
     rq = ScanRequest()
     rq.region.type = 1
@@ -92,8 +95,6 @@ def scan_request(region, start_key, stop_key, families, filters, close, scanner_
     if filters is not None:
         rq.scan.filter.CopyFrom(filters)
     return Request("Scan", rq)
-
-
 
 
 #  Converts a dictionary specifying ColumnFamilys -> Qualifiers into the Column pb type.
@@ -151,3 +152,4 @@ def values_to_column_values(val, delete=False):
         return col_vals
     except Exception:
         raise MalformedValues()
+

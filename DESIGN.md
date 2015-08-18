@@ -1,30 +1,28 @@
-#HBase, An Enigma
-
-## WARNING: This document is currently outdated due to a major refactor. While the general principles remain the same I vastly simplified the caching process and error handling.
+# HBase, An Enigma
 
 This document aims to be a primer on what happens under the hood in a native HBase client. It's by no means comprehensive and skips over a few of the details but it should give you some insight into the blackbox. While we're on the subject of discarding culpability I should mention that I'm not in fact a HBase wizard - instead I'm just a lowly intern trying to document what I've picked up along the way.
 
 Before we pop open the hood try to get intimate with the following terminology -
 
-- ###RPC
+- ### RPC
   Technically a 'remote procedure call', it's become a generic term I throw around. My intended meaning is any HBase operation [Get, Put, Append, Increment, Scan, ...], etc.
 
-- ###Client
+- ### Client
   Entrypoint for all RPC requests. Returned to the user in `pybase.NewClient()` the user will then funnel all operations through this client (`client.get()`, `client.scan()`, etc).
 
-- ###Region
+- ### Region
   A region represents a range of rows in a table that exist together as a blob in HBase.
 
-- ###Region Server (RS)
+- ### Region Server (RS)
   Region Servers are physical servers in an HBase cluster that serve a given set of regions. The entire difficulty in writing an HBase client is finding which RS you should request data from.
 
-- ###Region Client (RC)
+- ### Region Client (RC)
   This is a slight misnomer but we create an instance of a Region Client class once for every Region Server. Any operations that interact with that Region Server then go through the appropriate Region Client. This way we only need to maintain a single open connection to each RS.
 
-- ###Meta Client (MC)
+- ### Meta Client (MC)
   A special case of a Region Client, the MC's sole purpose in life is to maintain a connection with the HMaster (HMaster is responsible for monitoring all the RS's). We query the MC to perform meta lookups about, 1) the region the row is located in, 2) which RS is hosting that region.
 
-- ###Zookeeper (ZK)
+- ### Zookeeper (ZK)
   Zookeeper's well, Zookeeper. Vital for internal HBase functionality we really only need to contact the quorum every now and then to get the location of the HMaster. Preemptive clients could subscribe to ZK and have appropriate callbacks to preemptively purge caches when something happens in the cluster topology but be aware that this could put a massive load of ZK (launch 1000 clients? ZK now has to serve 1000 subscribers). This client is not preemptive - the only way we know when a RS dies is when our socket to it dies.
 
 

@@ -103,11 +103,12 @@ class RegionException(PyBaseException):
 
     def _handle_exception(self, main_client, **kwargs):
         if "dest_region" in kwargs:
-            if _let_one_through(self, kwargs["dest_region"]):
+            rg_n = kwargs["dest_region"].region_name
+            if _let_one_through(self, rg_n):
                 main_client._purge_region(kwargs["dest_region"])
-                if not _dynamic_sleep(self, kwargs["dest_region"]):
+                if not _dynamic_sleep(self, rg_n):
                     raise self
-                _let_all_through(self, kwargs["dest_region"])
+                _let_all_through(self, rg_n)
         else:
             raise self
 
@@ -126,7 +127,8 @@ class RegionOpeningException(RegionException):
 
     def _handle_exception(self, main_client, **kwargs):
         if "dest_region" in kwargs:
-            if not _dynamic_sleep(self, kwargs["dest_region"]):
+            rg_n = kwargs["dest_region"].region_name
+            if not _dynamic_sleep(self, rg_n):
                 raise self
         else:
             raise self
@@ -213,7 +215,7 @@ def _dynamic_sleep(exception, data):
         # seconds already by the time you hit retries=7. If you
         # fail again within the next 21.77/2 = 10.9 seconds I'm
         # going to end you. Otherwise we'll restart the counter.
-        if age < (_max_sleep / 2.0):
+        if age < _max_sleep:
             # You should die.
             return False
         _exception_count.pop(my_tuple)

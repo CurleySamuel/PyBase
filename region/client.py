@@ -11,6 +11,7 @@ from ..exceptions import *
 
 logger = logging.getLogger('pybase.' + __name__)
 logger.setLevel(logging.DEBUG)
+socket.setdefaulttimeout(2)
 
 
 # Used to encode and decode varints in a format protobuf expects.
@@ -183,10 +184,12 @@ class Client:
                 "Received invalid RPC ID. Got: %s, Expected: %s.", msg_id, my_id)
             self.missed_rpcs[msg_id] = data
             self.missed_rpcs_condition.notifyAll()
-            while my_id not in self.missed_rpcs and not self.sock_pool[0].closed:
+            while my_id not in self.missed_rpcs:
+                try:
+                    self.sock_pool[0].recv(0)
+                except socket.error:
+                    raise RegionServerException(region_client=self)
                 self.missed_rpcs_condition.wait()
-            if self.sock_pool[0].closed:
-                raise RegionServerException(region_client=self)
             new_data = self.missed_rpcs.pop(my_id)
             logger.debug("Another thread found my RPC! RPC ID: %s", my_id)
         return self._receive_rpc(my_id, my_request, data=new_data)
@@ -227,7 +230,7 @@ def NewClient(host, port, pool_size):
             c.sock_pool.append(s)
             c.read_lock_pool.append(Lock())
             c.write_lock_pool.append(Lock())
-    except socket.error:
+    except (socket.error, socket.timeout):
         return None
     return c
 

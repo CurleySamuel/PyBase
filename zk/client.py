@@ -15,7 +15,7 @@ znode = "/hbase"
 # LocateMeta takes a string representing the location of the ZooKeeper
 # quorum. It then asks ZK for the location of the MetaRegionServer,
 # returning a tuple containing (host_name, port).
-def LocateMeta(zkquorum, establish_connection_timeout=5, missing_znode_retries=5, zk=None):
+def LocateMaster(zkquorum, establish_connection_timeout=5, missing_znode_retries=5, zk=None):
 
     if zk is None:
         # Using Kazoo for interfacing with ZK
@@ -68,7 +68,7 @@ def LocateMeta(zkquorum, establish_connection_timeout=5, missing_znode_retries=5
     rsp = rsp[meta_length + 9:]
     meta = MetaRegionServer()
     meta.ParseFromString(rsp)
-    logger.info('Discovered MetaClient at %s:%s',
+    logger.info('Discovered Master at %s:%s',
                 meta.server.host_name, meta.server.port)
     return meta.server.host_name, meta.server.port
 
