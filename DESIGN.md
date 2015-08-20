@@ -46,7 +46,7 @@ While we're talking about general HBase knowledge I should probably mention the 
 
 Here's a useful JSONified way of understanding the relationship between the three -
 
-```
+```python
 {
   "table1": {
     "column_family_1": [
@@ -302,9 +302,72 @@ How `_dynamic_sleep` works is it buckets exceptions based on both the exception 
 
 Given these buckets that we've formed we can then keep track of how long it's been since a similar exception has been thrown. With that knowledge we can then exponentially increase the sleep time.
 
-# The Ugly 
+# The Ugly
 
+We know how and where to send requests. We know how to handle failures and exceptions across the board. What's left to do?  
 
-## Questions/Suggestions?
+Thread safety.
+
+For the uninitiated, gevent is a popular Python library that introduces the concept of greenlets. Greenlets can be thought of as very lightweight threads that can't be preempted but automatically yield the processor on any blocking calls or I/O. This means that while one greenlet is blocked receiving on a socket another greenlet can do useful work. A very common use case of gevent and PyBase could be -
+
+```python
+from gevent import monkey
+monkey.patch_all()
+import gevent
+import pybase
+
+def perform_get(key):
+    c.get("test", str(key))
+
+c = pybase.NewClient("localhost")
+threads = []
+for i in range(1, 1000):
+    threads.append(gevent.spawn(perform_get, i))
+gevent.joinall(threads)
+```
+
+What this code does is simultaneously launch 1000 GET requests through PyBase. This means that we'll have 1000 different 'threads' at different points inside our client at the same time. In it's current state the client will break and all hell would break loose.
+
+The rest of this document is mainly implementation details and the approaches I took to make PyBase gevent compatible.
+
+## Mutexes are your friend
+
+First step to thread safety is surround all critical sections in mutexes (locks in Python). I ended up using 7.
+
+- Lock on cache access.
+- Lock on master requests (only want one thread to query the master at any given time).
+- Write lock on every socket for every region client.
+- Read lock on every socket for every region client.
+- Lock on call_id (monotonically increasing RPC id).
+- Lock on data structures used by threads to swap results (see below).
+- Lock on the buckets used to bucket exceptions.
+
+## HBase can respond out of order
+
+Take the following scenario.
+
+- Thread 1 sends a hard request to HBase, grabs the read lock on the socket and starts listening for it's results.
+- Thread 2 comes in and sends an easy request to HBase then blocks trying to acquire the socket read lock.
+- Easy request's response is returned on the socket to Thread 1.
+- Thread 2 can now acquire the socket read lock and starts listening on the socket.
+- Hard request's response is returned on the socket to Thread 2.
+
+Uh oh. The threads got the wrong results back. To fix this I implemented the following trading algorithm -
+
+1. If your thread's call_id matches the response's call_id, you have the correct response. Otherwise GOTO 2.
+2. Insert into the `missed_rpcs` dictionary with key equal to the response's call_id and value equal to the raw response.
+3. Perform a `notifyAll()` on the `missed_rpcs_condition` variable.
+4. While your call_id is not in the `missed_rpcs` dictionary, wait on the condition variable.
+5. Pop your call_id from the dictionary and go back to processing the results using the raw response data provided in the dictionary.
+
+Greenlets can now trade RPCs if they happened to catch the wrong response on the socket!
+
+## Redundant META lookups
+
+1000 threads come in and they all get a cache miss because they all happen to be shooting for the same undiscovered region. If you're not careful you can send out 1000 META requests to the master server, each request identical to the last. We want to be able to send a single META lookup and have all 1000 threads use the (now cached) results of that lookup. 
+
+To implement this I surround the `_find_hosting_region` method with a `_master_lookup_lock`. Whichever thread is able to acquire the mutex first will enter the loop, perform the META lookup, discover the region/client and add everything to the cache before releasing the lock. The 999 threads which didn't come first will then re-check the cache to see if the region returned by the first thread is applicable to them or not. If so, great, they can continue. Otherwise the next person to acquire the mutex performs their own META call and so forth.
+
+# Questions/Suggestions?
 
 Shoot me an email at CurleySamuel@gmail.com. I'm friendly, I promise.
