@@ -364,9 +364,34 @@ Greenlets can now trade RPCs if they happened to catch the wrong response on the
 
 ## Redundant META lookups
 
-1000 threads come in and they all get a cache miss because they all happen to be shooting for the same undiscovered region. If you're not careful you can send out 1000 META requests to the master server, each request identical to the last. We want to be able to send a single META lookup and have all 1000 threads use the (now cached) results of that lookup. 
+1000 threads come in and they all get a cache miss because they all happen to be shooting for the same undiscovered region. If you're not careful you can send out 1000 META requests to the master server, all of them identical. We want to be able to send a single META lookup and have all 1000 threads use the (now cached) results of that lookup.
 
 To implement this I surround the `_find_hosting_region` method with a `_master_lookup_lock`. Whichever thread is able to acquire the mutex first will enter the loop, perform the META lookup, discover the region/client and add everything to the cache before releasing the lock. The 999 threads which didn't come first will then re-check the cache to see if the region returned by the first thread is applicable to them or not. If so, great, they can continue. Otherwise the next person to acquire the mutex performs their own META call and so forth.
+
+## Exception avalanche
+
+1000 threads try to ping a Region Server but the Region Server is dead, thus 1000 exceptions are thrown. The handling method for a RegionServerException like this is to purge the RC and all it's associated regions - but we only want to do it once, not 1000 times. We can break this into two key subproblems -
+
+1. We need a way to bucket similar exceptions.
+  - We can use the same bucketing algorithm as when we were bucketing exceptions for our dynamic sleep. That is we form tuples composed from `(thrown_exception_class_name, region_or_client_instance_were_trying_to_resolve)`. Any threads that share the same tuple are then deemed to be in the same bucket. Buckets can communicate via a dictionary that uses the tuple as the key.
+2. Given a bucket of exceptions we need one thread to attempt resolution while the others sit there waiting to be notified, "Hey, you can try your request again."
+  - ##### `_let_one_through`
+
+    The arguments to this function are all the necessary information to bucket a given exception. Every exception in a bucket will then share a semaphore. The function flow is then -
+    - Attempt a non-blocking acquire on the semaphore.
+    - If you get the semaphore then you're the effective leader of the thread.
+      - The function then returns True to you and you should go on your way handling the exception. Once the exception is handled you must then call `let_all_through`.
+    - If you don't get the semaphore it means some other thread is already off handling the exception and all you need to do is relax. Now perform a blocking acquire on the semaphore and once you acquire it, release it and return False.
+    - Returning True/False allows the calling function to diverge execution depending on whether you're the handling thread or not.
+
+  - ##### `_let_all_through`
+
+    Once you've handled the exception and everything is dandy then you should call `_let_all_through` to unblock the other threads in your bucket. The flow is -
+
+    - While a non-blocking acquire on the semaphore is False
+      - Release the semaphore.
+      - Yield the processor.
+    - Once you can finally acquire the semaphore again it means that all other threads that were waiting on the semaphore have been let through. At this point you can return as the bucket is now empty!
 
 # Questions/Suggestions?
 
