@@ -116,13 +116,18 @@ class MasterServerException(PyBaseException):
                     "Encountered an exception with the Master server. Sleeping then reestablishing.")
                 if not _dynamic_sleep(self, None):
                     raise self
-                main_client._recreate_meta_client()
+                main_client._recreate_master_client()
                 _let_all_through(self, None)
 
 
 # Master gave us funky data. Unrecoverable.
 class MasterMalformedResponseException(MasterServerException):
-    pass
+    def __init__(self, host, port):
+        self.host = host
+        self.port = port
+
+    def _handle_exception(self, main_client, **kwargs):
+        raise self.__class__(self.message)
 
 
 # All region exceptions inherit from me.
@@ -303,4 +308,3 @@ def _dynamic_sleep(exception, data):
     logger.info("Sleeping for {0:.2f} seconds.".format(new_sleep))
     sleep(new_sleep)
     return True
-

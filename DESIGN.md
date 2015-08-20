@@ -245,36 +245,64 @@ The vast majority of RPCs are to Region Servers and follow the following format.
 
 ## ALL the failures!
 
-We're trying to build a highly available system across a cluster of not-so-available machines. We may not be able to fix everything (I'm looking at you ZooKeeper) but we can at least gracefully fail when the impossible happens.
+We're trying to build a highly available system across a cluster of not-so-available machines. We may not be able to fix everything but we can at least fail gracefully when the impossible happens.
 
-### Can't connect to Zookeeper
+But some exceptions are recoverable. Instead of having exception handling littered throughout the code I decided to use a different model where exceptions know how to handle themselves. What I mean by this is that every custom PyBase exception has a custom method `_handle_exception` which will either re-raise the exception in the case that this exception isn't recoverable or it will perform the necessary work to resolve the exception in the case of a recoverable exception. This often means purging the cache and closing clients/regions.
 
-Pretty much SOL with this one. We can handle Zookeeper being dead as long as we know the location of HMaster and it stays alive, but that doesn't really matter as I doubt HBase will last long without Zookeeper.
-
-Solution: Raise an exception.
-
-### Can't connect to HMaster
-
-We run back to Zookeeper and ask them for the new location of HMaster. Zookeeper dead? See above.
-
-If ZooKeeper gives us bad information then we sleep and retry a few times but ultimately give up.
-
-Solution: Raise an exception.
-
-### Can't connect to a Region Server
-
-As mentioned earlier, burn it to the ground and purge the relevant information in our caches. Then run back to the MC and ask it for the new region information for a given table and row. Insert the new information into our caches and create a new RC if it doesn't already exist for the RS. MC dead? See above.
-
-Solution: We didn't need you anyway!
+Below I've mapped exceptions that can be thrown either remotely on HBase or locally in the client to my custom PyBase exceptions. Further down I then list all the custom PyBase exceptions and what they do to attempt resolution.
 
 
-| Exception |    How we handle it |
+| Exception |    PyBase Exception |
 |:-----------:|:-------------|
-| org.apache.hadoop.hbase.regionserver.NoSuchColumnFamilyException | There's not much we can do on our end to resolve this one. The user specified a nonexistent column family so we raise an exception locally letting them know. |
-| java.io.IOException    | I've discovered through testing that sometimes this exception is thrown instead of the above when bad column families are provided. Don't know why but oh well. |
-| org.apache.hadoop.hbase.exceptions.RegionMovedException    | If a region used to be hosted on this RS but then got moved or split, the RS will throw this exception. It means our caches are stale so we purge our caches and ask the MC for updated region information. |
-| org.apache.hadoop.hbase.NotServingRegionException | This one's worrisome. It means that while a region is in fact hosted on this RS, for whatever reason it happens to be unavailable. I don't have an ideal way to handle this so currently sleep for a little bit and retry a few times. If it's still unavailable I run back to the MC and hopefully they'll give me a new RS. |
+| (RegionServer) socket.error | RegionServerException |
+| (MasterServer) socket.error | MasterServerException |
+| Can't connect to RS | RegionServerException |
+| org.apache.hadoop.hbase.regionserver.NoSuchColumnFamilyException | NoSuchColumnFamilyException |
+| java.io.IOException | NoSuchColumnFamilyException |
+| org.apache.hadoop.hbase.exceptions.RegionMovedException | RegionMovedException |
+| org.apache.hadoop.hbase.NotServingRegionException | NotServingRegionException |
+| org.apache.hadoop.hbase.regionserver.RegionServerStoppedException | RegionServerException |
+| org.apache.hadoop.hbase.exceptions.RegionOpeningException | RegionOpeningException |
+| All other remote exceptions | PyBaseException |
+| Cannot marshal Filter | ValueError |
+| Cannot marshal Comparable | ValueError |
+| Cannot marshal BytesBytesPair | ValueError |
+| Cannot marshal RowRange | ValueError |
+| Cannot connect to ZK | ZookeeperConnectionException |
+| Cannot find ZNode in ZK | ZookeeperZNodeException |
+| Malformed ZK response | ZookeeperResponseException |
+| Cannot marshal Families | MalformedFamilies |
+| Cannot marshal Values | MalformedValues |
+| Table doesn't exist | NoSuchTableException |
 
+| PyBase Exception | Resolution |
+|:----------------:|:-----------|
+| PyBaseException | Unrecoverable. Re-raise exception. |
+| ZookeeperException | Unrecoverable. Re-raise exception. |
+| ZookeeperConnectionException | Unrecoverable. Re-raise exception. |
+| ZookeeperZNodeException | Unrecoverable. Re-raise exception. |
+| ZookeeperResponseException | Unrecoverable. Re-raise exception. |
+| RegionServerException | Purge both the region client and all the regions it serves from our cache. Subsequent lookups will need to reach out to rediscover the regions. |
+| RegionServerStoppedException | Same as above. |
+| MasterServerException | Kill the current Master client, reach out to ZK for an updated Master location, connect to new Master. |
+| MasterMalformedResponseException | Unrecoverable. Re-raise exception. |
+| RegionException | Purge this region from our cache. |
+| RegionMovedException | Purge this region from our cache. |
+| NotServingRegionException | Purge this region from our cache. |
+| RegionOpeningException | Sleep. |
+| NoSuchTableException | Unrecoverable. Re-raise exception. |
+| NoSuchColumnFamilyException | Unrecoverable. Re-raise exception. |
+| MalformedFamilies | Unrecoverable. Re-raise exception. |
+| MalformedValues | Unrecoverable. Re-raise exception. |
+
+
+These handling methods are all well and good but sometimes all it takes to resolve an exception is time. ZK may need to update, Master may need to update, a region may just be temporarily down. Instead of retrying instantly and hammering the server we want a way to be able to exponentially back off on our retry attempts until a final failure threshold. To do so any recoverable exception will include a call to `_dynamic_sleep` in it's handling method.
+
+How `_dynamic_sleep` works is it buckets exceptions based on both the exception class that was raised and a special attribute that the exception aims to resolve (could be a region instance or a client instance). This way if a `RegionOpeningException` is thrown at the same time for Region1, Region2 they won't be bucketed together. If `RegionOpeningException` is thrown at the same time for the same region then they will be bucketed together.
+
+Given these buckets that we've formed we can then keep track of how long it's been since a similar exception has been thrown. With that knowledge we can then exponentially increase the sleep time.
+
+# The Ugly 
 
 
 ## Questions/Suggestions?
