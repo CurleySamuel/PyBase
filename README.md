@@ -1,5 +1,5 @@
 # PyBase
-Native Python HBase Client (i.e doesn't use Thrift) with gevent support.
+Native Python HBase Client (i.e doesn't use Thrift) developed during an internship at [Flipboard](https://about.flipboard.com/).
 
 Currently supports the following commands -
 
