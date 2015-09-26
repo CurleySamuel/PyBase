@@ -405,9 +405,14 @@ class MainClient:
         # Loop over the regions to close and close whoever their
         # attached client is.
         #
-        # TODO: ...should we really be killing a client unneccessarily?
+        # TODO: Test this code
         for reg in overlapping_region_intervals:
-            reg.data.region_client.close()
+            # Remove the invalid region
+            region_client = reg.data.region_client
+            region_client.regions.remove(reg)
+            # If the region_client is empty, destroy it
+            if len(region_client.regions) == 0:
+                region_client.close()
 
     def _purge_client(self, region_client):
         # Given a client to close, purge all of it's known hosted regions from
