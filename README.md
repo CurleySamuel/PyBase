@@ -18,6 +18,15 @@ Development has slowed down now that I'm back at school. Would love help moving 
 
 Developed on HBase >= 1.0. Theoretically compatible with any version of HBase utilizing Protobuf (0.96+) but wholly untested.
 
+## Installation
+
+```pip install git+git://github.com/CurleySamuel/PyBase.git```
+
+or add following to requirements.txt
+
+```git+git://github.com/hzhaofb/PyBase.git#egg=pybase```
+
+
 ## Example Usage
 
 #### Create a client
