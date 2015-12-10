@@ -18,8 +18,8 @@ class TestClient(unittest.TestCase):
     def test_new_client_good(self):
         c = pybase.NewClient(zkquorum)
         self.assertEqual(c.zkquorum, zkquorum)
-        self.assertIsNotNone(c.meta_client)
-        self.assertIsNotNone(c.meta_client.host)
+        self.assertIsNotNone(c.master_client)
+        self.assertIsNotNone(c.master_client.host)
 
     def test_new_client_bad(self):
         try:
@@ -170,7 +170,7 @@ class TestPut(unittest.TestCase):
         try:
             self.c.put(table, self.row_prefix + "3", values)
             self.assertEqual(1, 0)
-        except ValueError:
+        except MalformedValues:
             pass
 
     def test_put_bad_column_family(self):
@@ -246,8 +246,7 @@ class TestScan(unittest.TestCase):
 
     def test_scan_with_second_filter(self):
         new_filter = pybase.filters.ColumnPrefixFilter("ob")
-        f_list = pybase.filters.FilterList(
-            pybase.filters.MUST_PASS_ALL, [new_filter, self.pFilter])
+        f_list = pybase.filters.FilterList(pybase.filters.MUST_PASS_ALL, new_filter, self.pFilter)
         rsp = self.c.scan(table, filters=f_list)
         self.assertEqual(len(rsp.flatten_cells()), 100)
 

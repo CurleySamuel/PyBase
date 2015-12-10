@@ -111,7 +111,7 @@ class MasterServerException(PyBaseException):
         # Let one greenlet through. Others block and eventually return False.
         if _let_one_through(self, None):
             # Makes sure someone else hasn't already fixed the issue.
-            if main_client.meta_client is None or (self.host == main_client.meta_client.host and self.port == main_client.meta_client.port):
+            if main_client.master_client is None or (self.host == main_client.master_client.host and self.port == main_client.master_client.port):
                 logger.warn(
                     "Encountered an exception with the Master server. Sleeping then reestablishing.")
                 if not _dynamic_sleep(self, None):
