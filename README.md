@@ -24,7 +24,7 @@ Developed on HBase >= 1.0. Theoretically compatible with any version of HBase ut
 
 or add following to requirements.txt
 
-```git+git://github.com/hzhaofb/PyBase.git#egg=pybase```
+<code>git+git://github.com/hzhaofb/PyBase.git#egg=pybase</code>
 
 
 ## Example Usage
