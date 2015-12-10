@@ -132,6 +132,15 @@ class MainClient:
     """
 
     def get(self, table, key, families={}, filters=None):
+        """
+        get a row or specified cell with optional filter
+        :param table: hbase table
+        :param key: row key
+        :param families: (optional) specifies columns to get,
+          e.g., {"columnFamily1":["col1","col2"], "colFamily2": "col3"}
+        :param filters: (optional) column filters
+        :return: response with cells
+        """
         try:
             # Step 0. Set dest_region to None so if an exception is
             # thrown in _find_hosting_region, the exception handling
