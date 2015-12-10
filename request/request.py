@@ -109,13 +109,25 @@ def scan_request(region, start_key, stop_key, families, filters, close, scanner_
 #            "qual3"
 #        ]
 #    }
+#  Also support single qualifier
+#    {
+#        "columnFamily1": "qual",
+#        "columnFamily2": [
+#            "qual3"
+#        ]
+#    }
+
 def families_to_columns(fam):
     try:
         cols = []
         for key in fam.keys():
             c = Column()
             c.family = key
-            c.qualifier.extend(fam[key])
+            val = fam[key]
+            if type(val) is list:
+                c.qualifier.extend(val)
+            else:
+                c.qualifier.append(val)
             cols.append(c)
         return cols
     except Exception:

@@ -76,7 +76,7 @@ class TestGet(unittest.TestCase):
         families = {cf1: "oberyn"}
         res = self.c.get(table, self.row_prefix, families=families)
         resd = result_to_dict(res)
-        self.assertDictContainsSubset(resd, self.values)
+        self.assertEqual(resd, {cf1: {"oberyn": "is the"}})
         self.assertNotIn(cf2, resd.keys())
 
     def test_get_bad_table(self):
