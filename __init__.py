@@ -1,2 +1,2 @@
-from client import NewClient
-assert NewClient  # silence pyflakes
+#from client import NewClient
+#assert NewClient  # silence pyflakes
