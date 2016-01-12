@@ -26,7 +26,8 @@ from ..exceptions import *
 
 logger = logging.getLogger('pybase.' + __name__)
 logger.setLevel(logging.DEBUG)
-socket.setdefaulttimeout(2)
+# socket.setdefaulttimeout interfers with gevent.
+#socket.setdefaulttimeout(2)
 
 # Used to encode and decode varints in a format protobuf expects.
 encoder = varint.encodeVarint
