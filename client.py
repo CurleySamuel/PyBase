@@ -29,30 +29,6 @@ from exceptions import *
 # Using a tiered logger such that all submodules propagate through to this
 # logger. Changing the logging level here should affect all other modules.
 logger = logging.getLogger('pybase')
-logging.config.dictConfig({
-    'version': 1,
-    'disable_existing_loggers': False,
-    'formatters': {
-        'standard': {
-            'format': '%(asctime)s [%(levelname)s] %(name)s: %(message)s'
-        }
-    },
-    'handlers': {
-        'default': {
-            'level': 'INFO',
-            'class': 'logging.StreamHandler',
-            'formatter': 'standard'
-        }
-    },
-    'loggers': {
-        '': {
-            'handlers': ['default'],
-            'level': 'INFO',
-            'propagate': True
-        }
-    }
-})
-
 
 class MainClient:
 
