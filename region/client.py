@@ -258,6 +258,7 @@ def NewClient(host, port, pool_size):
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             s.connect((host, int(port)))
             _send_hello(s)
+            s.settimeout(2)
             c.sock_pool.append(s)
             c.read_lock_pool.append(Lock())
             c.write_lock_pool.append(Lock())
