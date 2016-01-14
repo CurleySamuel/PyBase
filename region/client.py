@@ -81,6 +81,9 @@ class Client:
         self.missed_rpcs = {}
         self.missed_rpcs_lock = Lock()
         self.missed_rpcs_condition = Condition(self.missed_rpcs_lock)
+        # Set to true when .close is called - this allows threads/greenlets
+        # stuck in _bad_call_id to escape into the error handling code.
+        self.shutting_down = False
         # We would like the region client to keep track of the regions that it
         # hosts. That way if we detect a Region server issue when touching one
         # region, we can close them all at the same time (saving us a significant
@@ -212,9 +215,7 @@ class Client:
             self.missed_rpcs[msg_id] = data
             self.missed_rpcs_condition.notifyAll()
             while my_id not in self.missed_rpcs:
-                try:
-                    self.sock_pool[0].recv(0)
-                except socket.error:
+                if self.shutting_down:
                     raise RegionServerException(region_client=self)
                 self.missed_rpcs_condition.wait()
             new_data = self.missed_rpcs.pop(my_id)
@@ -237,6 +238,7 @@ class Client:
 
     # Do any work to close open file descriptors, etc.
     def close(self):
+        self.shutting_down = True
         for sock in self.sock_pool:
             sock.close()
         # We could still have greenlets waiting in the bad_call_id pools! Wake
