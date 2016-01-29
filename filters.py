@@ -13,9 +13,7 @@
    See the License for the specific language governing permissions and
    limitations under the License.
 """
-import sys
 import traceback
-
 import pb.Filter_pb2 as pbFilter
 import pb.Comparator_pb2 as pbComparator
 from pb.HBase_pb2 import BytesBytesPair as pbBytesBytesPair
