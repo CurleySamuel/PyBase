@@ -13,6 +13,9 @@
    See the License for the specific language governing permissions and
    limitations under the License.
 """
+import sys
+import traceback
+
 import pb.Filter_pb2 as pbFilter
 import pb.Comparator_pb2 as pbComparator
 from pb.HBase_pb2 import BytesBytesPair as pbBytesBytesPair
@@ -213,7 +216,7 @@ class QualifierFilter:
     def __init__(self, compare_filter):
         self.filter_type = pbFilter.QualifierFilter
         self.name = filter_path + "QualifierFilter"
-        self.compare_filter = _to_filter(compare_filter)
+        self.compare_filter = _to_pb_filter(compare_filter)
 
 
 class RandomRowFilter:
@@ -321,14 +324,16 @@ class MultiRowRangeFilter:
 def _to_filter(orig_filter):
     if orig_filter is None:
         return None
+    ft = pbFilter.Filter()
+    ft.name = orig_filter.name
+    ft.serialized_filter = _to_pb_filter(orig_filter).SerializeToString()
+    return ft
+
+def _to_pb_filter(orig_filter):
     try:
-        # ft is a generic Filter type. ft2 is the special Filter type
-        # (MultiRowRangeFilter, etc). You serialize ft2 and stuff it into ft.
-        ft = pbFilter.Filter()
-        ft.name = orig_filter.name
         ft2 = orig_filter.filter_type()
         members = [attr for attr in dir(orig_filter) if not callable(
-            attr) and not attr.startswith("__") and attr not in ["name", "filter_type", "add_filters"]]
+                attr) and not attr.startswith("__") and attr not in ["name", "filter_type", "add_filters"]]
         for member in members:
             try:
                 setattr(ft2, member, getattr(orig_filter, member))
@@ -340,11 +345,10 @@ def _to_filter(orig_filter):
                 except AttributeError:
                     # Just kidding. It's a composite field.
                     el.CopyFrom(getattr(orig_filter, member))
-        # Serialize ft2 and stuff it into ft. Return ft.
-        ft.serialized_filter = ft2.SerializeToString()
-        return ft
-    except Exception:
-        raise ValueError("Malformed Filter provided")
+        return ft2
+    except Exception as ex:
+        raise ValueError("Malformed Filter provided, %s %s" % (ex, traceback.format_exc()))
+
 
 
 class ByteArrayComparable:
@@ -363,8 +367,8 @@ def _to_comparable(orig_cmp):
         for member in members:
             setattr(new_cmp, member, getattr(orig_cmp, member))
         return new_cmp
-    except Exception:
-        raise ValueError("Malformed Comparable provided")
+    except Exception as ex:
+        raise ValueError("Malformed Comparable provided %s %s" % (ex, traceback.format_exc()))
 
 
 class BinaryComparator:
@@ -436,16 +440,17 @@ def _to_comparator(orig_cmp):
             attr) and not attr.startswith("__") and attr not in ["name", "comparator_type"]]
         for member in members:
             try:
-                setattr(new_cmp2, member, getattr(orig_cmp, member))
+                val = getattr(orig_cmp, member)
+                if val is not None:
+                    setattr(new_cmp2, member, val)
             except AttributeError:
                 # It's a composite element and we need to copy it in.
                 el = getattr(new_cmp2, member)
                 el.CopyFrom(getattr(orig_cmp, member))
         new_cmp.serialized_comparator = new_cmp2.SerializeToString()
         return new_cmp
-    except Exception:
-        raise ValueError("Malformed Comparator provided")
-
+    except Exception as ex:
+        raise ValueError("Malformed Comparator provided %s %s" % (ex, traceback.format_exc()))
 
 class BytesBytesPair:
 
