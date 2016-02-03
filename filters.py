@@ -334,7 +334,10 @@ def _to_pb_filter(orig_filter):
                 attr) and not attr.startswith("__") and attr not in ["name", "filter_type", "add_filters"]]
         for member in members:
             try:
-                setattr(ft2, member, getattr(orig_filter, member))
+                val = getattr(orig_filter, member)
+                if val is not None:
+                    # skip none value that should be optional
+                    setattr(ft2, member, val)
             except AttributeError:
                 # It's a repeated element and we need to 'extend' it.
                 el = getattr(ft2, member)
@@ -363,7 +366,10 @@ def _to_comparable(orig_cmp):
         members = [attr for attr in dir(orig_cmp) if not callable(
             attr) and not attr.startswith("__") and attr not in ["name", "comparable_type"]]
         for member in members:
-            setattr(new_cmp, member, getattr(orig_cmp, member))
+            val = getattr(orig_cmp, member)
+            # skip none value that should be optional
+            if val is not None:
+                setattr(new_cmp, member, val)
         return new_cmp
     except Exception as ex:
         raise ValueError("Malformed Comparable provided %s %s" % (ex, traceback.format_exc()))
@@ -440,6 +446,7 @@ def _to_comparator(orig_cmp):
             try:
                 val = getattr(orig_cmp, member)
                 if val is not None:
+                    # skip none value that should be optional
                     setattr(new_cmp2, member, val)
             except AttributeError:
                 # It's a composite element and we need to copy it in.
