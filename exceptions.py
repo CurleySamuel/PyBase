@@ -88,7 +88,8 @@ class RegionServerException(PyBaseException):
                     main_client._purge_client(self.region_client)
                     # Sleep for an arbitrary amount of time. If this returns
                     # False then we've hit our max retry threshold. Die.
-                    if not _dynamic_sleep(self, self.region_client):
+                    key = self.region_client.host + ':' + self.region_client.port
+                    if not _dynamic_sleep(self, key):
                         raise self
             # Notify all the other threads to wake up because we've handled the
             # exception for everyone!
