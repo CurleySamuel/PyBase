@@ -76,24 +76,26 @@ class RegionServerException(PyBaseException):
         # Let one greenlet through per region_client (returns True otherwise
         # blocks and eventually returns False)
         if _let_one_through(self, self.region_client):
-            if self.region_client is not None:
-                # We need to make sure that a different thread hasn't already
-                # reestablished to this region.
-                loc = self.region_client.host + ":" + self.region_client.port
-                if loc in main_client.reverse_client_cache:
-                    # We're the first in and it's our job to kill the client.
-                    # Purge it.
-                    logger.warn("Region server %s:%s refusing connections. Purging cache, sleeping, retrying.",
-                                self.region_client.host, self.region_client.port)
-                    main_client._purge_client(self.region_client)
-                    # Sleep for an arbitrary amount of time. If this returns
-                    # False then we've hit our max retry threshold. Die.
-                    key = self.region_client.host + ':' + self.region_client.port
-                    if not _dynamic_sleep(self, key):
-                        raise self
-            # Notify all the other threads to wake up because we've handled the
-            # exception for everyone!
-            _let_all_through(self, self.region_client)
+            try:
+                if self.region_client is not None:
+                    # We need to make sure that a different thread hasn't already
+                    # reestablished to this region.
+                    loc = self.region_client.host + ":" + self.region_client.port
+                    if loc in main_client.reverse_client_cache:
+                        # We're the first in and it's our job to kill the client.
+                        # Purge it.
+                        logger.warn("Region server %s:%s refusing connections. Purging cache, sleeping, retrying.",
+                                    self.region_client.host, self.region_client.port)
+                        main_client._purge_client(self.region_client)
+                        # Sleep for an arbitrary amount of time. If this returns
+                        # False then we've hit our max retry threshold. Die.
+                        key = self.region_client.host + ':' + self.region_client.port
+                        if not _dynamic_sleep(self, key):
+                            raise self
+            finally:
+                # Notify all the other threads to wake up because we've handled the
+                # exception for everyone!
+                _let_all_through(self, self.region_client)
 
 
 # RegionServer stopped (gracefully).
@@ -111,13 +113,15 @@ class MasterServerException(PyBaseException):
     def _handle_exception(self, main_client, **kwargs):
         # Let one greenlet through. Others block and eventually return False.
         if _let_one_through(self, None):
-            # Makes sure someone else hasn't already fixed the issue.
-            if main_client.master_client is None or (self.host == main_client.master_client.host and self.port == main_client.master_client.port):
-                logger.warn(
-                    "Encountered an exception with the Master server. Sleeping then reestablishing.")
-                if not _dynamic_sleep(self, None):
-                    raise self
-                main_client._recreate_master_client()
+            try:
+                # Makes sure someone else hasn't already fixed the issue.
+                if main_client.master_client is None or (self.host == main_client.master_client.host and self.port == main_client.master_client.port):
+                    logger.warn(
+                        "Encountered an exception with the Master server. Sleeping then reestablishing.")
+                    if not _dynamic_sleep(self, None):
+                        raise self
+                    main_client._recreate_master_client()
+            finally:
                 _let_all_through(self, None)
 
 
@@ -138,10 +142,12 @@ class RegionException(PyBaseException):
         if "dest_region" in kwargs:
             rg_n = kwargs["dest_region"].region_name
             if _let_one_through(self, rg_n):
-                main_client._purge_region(kwargs["dest_region"])
-                if not _dynamic_sleep(self, rg_n):
-                    raise self
-                _let_all_through(self, rg_n)
+                try:
+                    main_client._purge_region(kwargs["dest_region"])
+                    if not _dynamic_sleep(self, rg_n):
+                        raise self
+                finally:
+                    _let_all_through(self, rg_n)
         else:
             raise self
 
@@ -243,12 +249,12 @@ def _let_one_through(exception, data):
     if my_sem.acquire(blocking=False):
         # Look at me - I'm the captain now.
         return True
-        pass
     else:
         # Someone else is already handling
         # the exception. Sit here until they
         # release the semaphore.
         my_sem.acquire()
+        my_sem.release()
         return False
 
 
@@ -257,18 +263,6 @@ def _let_all_through(exception, data):
     my_tuple = (exception.__class__.__name__, data)
     _buckets_lock.acquire()
     my_sem = _buckets[my_tuple]
-    # We're going to repeatedly try and non-blocking acquire the semaphore. If
-    # we can't get it then that means someone else is waiting on it. We then
-    # release() so they can grab it and repeat until there's no longer anyone
-    # waiting.
-    while not my_sem.acquire(blocking=False):
-        my_sem.release()
-        # ugh.
-        # When we release a semaphore we need this
-        # greenlet (if gevent is being used) to yield
-        # the processor so another greenlet can grab
-        # the now free semaphore.
-        sleep(0)
     my_sem.release()
     _buckets_lock.release()
 
