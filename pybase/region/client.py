@@ -17,7 +17,10 @@ from __future__ import absolute_import, print_function
 
 import logging
 import socket
-from cStringIO import StringIO
+try:
+    from io import StringIO
+except ImportError:
+    from cStringIO import StringIO
 from struct import pack, unpack
 from threading import Condition, Lock
 

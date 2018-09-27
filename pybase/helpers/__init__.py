@@ -1,3 +1,3 @@
-import varint
-# Silence pyflakes
-assert varint
+from __future__ import absolute_import, print_function
+
+from . import varint  # noqa

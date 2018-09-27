@@ -24,10 +24,9 @@ import pybase.region.client as region
 import pybase.zk.client as zk
 from intervaltree import IntervalTree
 
-from filters import _to_filter
-
 from .exceptions import (MasterServerException, NoSuchTableException,
                          PyBaseException, RegionException, RegionServerException)
+from .filters import _to_filter
 from .region.region import region_from_cell
 from .request import request
 

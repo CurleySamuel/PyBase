@@ -11,9 +11,9 @@ from google.protobuf import message as _message
 from google.protobuf import reflection as _reflection
 from google.protobuf import symbol_database as _symbol_database
 
-import ClusterId_pb2
-import FS_pb2
-import HBase_pb2
+from . import ClusterId_pb2
+from . import FS_pb2
+from . import HBase_pb2
 
 _b=sys.version_info[0]<3 and (lambda x:x) or (lambda x:x.encode('latin1'))
 # @@protoc_insertion_point(imports)
