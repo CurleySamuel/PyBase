@@ -55,12 +55,7 @@ class FilterList:
         self.name = filter_path + "FilterList"
         self.operator = operator
         self.filters = []
-        try:
-            for incoming_filter in arg:
-                self.filters.append(_to_filter(incoming_filter))
-        except TypeError:
-            # They passed a single filter and not a sequence of filters.
-            self.filters.append(_to_filter(filters))
+        self.add_filters(*arg)
 
     def add_filters(self, *arg):
         for new_filter in arg:
@@ -247,7 +242,8 @@ class SkipColumnValueExcludeFilter:
 
 class SkipColumnValueFilter:
 
-    def __init__(self, compare_op, comparator, column_family, column_qualifier, filter_if_missing, latest_version_only):
+    def __init__(self, compare_op, comparator, column_family, column_qualifier, filter_if_missing,
+                 latest_version_only):
         self.filter_type = pbFilter.SkipColumnValueFilter
         self.name = filter_path + "SkipColumnValueFilter"
         self.compare_op = compare_op
@@ -330,11 +326,14 @@ def _to_filter(orig_filter):
     ft.serialized_filter = _to_pb_filter(orig_filter).SerializeToString()
     return ft
 
+
 def _to_pb_filter(orig_filter):
     try:
         ft2 = orig_filter.filter_type()
-        members = [attr for attr in dir(orig_filter) if not callable(
-                attr) and not attr.startswith("__") and attr not in ["name", "filter_type", "add_filters"]]
+        members = [
+            attr for attr in dir(orig_filter)
+            if not callable(attr) and not attr.startswith("__") and
+            attr not in ["name", "filter_type", "add_filters"]]
         for member in members:
             try:
                 val = getattr(orig_filter, member)
@@ -352,7 +351,6 @@ def _to_pb_filter(orig_filter):
         return ft2
     except Exception as ex:
         raise ValueError("Malformed Filter provided, %s %s" % (ex, traceback.format_exc()))
-
 
 
 class ByteArrayComparable:
@@ -459,6 +457,7 @@ def _to_comparator(orig_cmp):
         return new_cmp
     except Exception as ex:
         raise ValueError("Malformed Comparator provided %s %s" % (ex, traceback.format_exc()))
+
 
 class BytesBytesPair:
 

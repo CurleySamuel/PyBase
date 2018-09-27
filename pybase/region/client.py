@@ -75,7 +75,8 @@ class Client:
         # Receive an RPC with incorrect call_id?
         #       1. Acquire lock
         #       2. Place raw data into missed_rpcs with key call_id
-        #       3. Notify all other threads to wake up (nothing will happen until you release the lock)
+        #       3. Notify all other threads to wake up (nothing will happen until you release the
+        #          lock)
         #       4. WHILE: Your call_id is not in the dictionary
         #               4.5  Call wait() on the conditional and get comfy.
         #       5. Pop your data out
@@ -127,8 +128,8 @@ class Client:
         pool_id = my_id % self.pool_size
         try:
             with self.write_lock_pool[pool_id]:
-                logger.debug(
-                    'Sending %s RPC to %s:%s on pool port %s', rq.type, self.host, self.port, pool_id)
+                logger.debug('Sending %s RPC to %s:%s on pool port %s',
+                             rq.type, self.host, self.port, pool_id)
                 self.sock_pool[pool_id].send(to_send)
         except socket.error:
             # RegionServer dead?
@@ -183,13 +184,16 @@ class Client:
         elif header.exception.exception_class_name != u'':
             # If we're in here it means a remote exception has happened.
             exception_class = header.exception.exception_class_name
-            if exception_class == 'org.apache.hadoop.hbase.regionserver.NoSuchColumnFamilyException' or exception_class == "java.io.IOException":
+            if exception_class in \
+                    {'org.apache.hadoop.hbase.regionserver.NoSuchColumnFamilyException',
+                     "java.io.IOException"}:
                 raise NoSuchColumnFamilyException()
             elif exception_class == 'org.apache.hadoop.hbase.exceptions.RegionMovedException':
                 raise RegionMovedException()
             elif exception_class == 'org.apache.hadoop.hbase.NotServingRegionException':
                 raise NotServingRegionException()
-            elif exception_class == 'org.apache.hadoop.hbase.regionserver.RegionServerStoppedException':
+            elif exception_class == \
+                    'org.apache.hadoop.hbase.regionserver.RegionServerStoppedException':
                 raise RegionServerException(region_client=self)
             elif exception_class == 'org.apache.hadoop.hbase.exceptions.RegionOpeningException':
                 raise RegionOpeningException()

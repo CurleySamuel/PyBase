@@ -212,13 +212,15 @@ class MainClient:
                 # or merged so this recursive call may be scanning multiple regions or only half
                 # of one region).
                 result_set._append_response(self.scan(
-                    table, start_key=previous_stop_key, stop_key=cur_region.stop_key, families=families, filters=filters))
+                    table, start_key=previous_stop_key, stop_key=cur_region.stop_key,
+                    families=families, filters=filters))
                 # We continue here because we don't want to append the
                 # first_response results to the result_set. When we did the
                 # recursive scan it rescanned whatever the first_response
                 # initially contained. Appending both will produce duplicates.
                 previous_stop_key = cur_region.stop_key
-                if previous_stop_key == '' or (stop_key is not None and previous_stop_key > stop_key):
+                if previous_stop_key == '' or \
+                        (stop_key is not None and previous_stop_key > stop_key):
                     break
                 continue
             # Both calls succeeded! Append the results to the result_set.
@@ -233,7 +235,8 @@ class MainClient:
                 break
         return result_set
 
-    def _scan_hit_region_once(self, previous_stop_key, table, start_key, stop_key, families, filters):
+    def _scan_hit_region_once(self, previous_stop_key, table, start_key, stop_key, families,
+                              filters):
         try:
             # Lookup the next region to scan by searching for the
             # previous_stop_key (region keys are inclusive on the start and
@@ -241,10 +244,11 @@ class MainClient:
             cur_region = self._find_hosting_region(
                 table, previous_stop_key)
         except PyBaseException as e:
-            # This means that either Master is down or something's funky with the META region. Try handling it
-            # and recursively perform the same call again.
+            # This means that either Master is down or something's funky with the META region.
+            # Try handling it and recursively perform the same call again.
             e._handle_exception(self)
-            return self._scan_hit_region_once(previous_stop_key, table, start_key, stop_key, families, filters)
+            return self._scan_hit_region_once(previous_stop_key, table, start_key, stop_key,
+                                              families, filters)
         # Create the scan request object. The last two values are 'Close' and
         # 'Scanner_ID' respectively.
         rq = request.scan_request(
@@ -256,7 +260,8 @@ class MainClient:
             # Uh oh. Probably a region/region server issue. Handle it and try
             # again.
             e._handle_exception(self, dest_region=cur_region)
-            return self._scan_hit_region_once(previous_stop_key, table, start_key, stop_key, families, filters)
+            return self._scan_hit_region_once(previous_stop_key, table, start_key, stop_key,
+                                              families, filters)
         return response, cur_region
 
     def _scan_region_while_more_results(self, cur_region, response):
@@ -279,7 +284,7 @@ class MainClient:
         # Now close the scanner.
         rq = request.scan_request(
             cur_region, None, None, None, None, True, scanner_id)
-        _ = cur_region.region_client._send_request(rq)
+        cur_region.region_client._send_request(rq)
         # Close it and return the results!
         return response_set
 
@@ -474,7 +479,7 @@ class Result:
         try:
             self.cells.extend([result.cell for result in rsp.results])
             self.stale = self.stale or rsp.stale
-        except AttributeError as e:
+        except AttributeError:
             # This is a single result object we're merging instead.
             self.cells.extend(rsp.cells)
             self.stale = self.stale or rsp.stale

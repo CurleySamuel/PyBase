@@ -12,7 +12,7 @@ metaInfoFamily = {"info": []}
 
 class Request:
 
-    def __init__(self, type, pb):
+    def __init__(self, type, pb):  # noqa: B002
         self.type = type
         self.pb = pb
 

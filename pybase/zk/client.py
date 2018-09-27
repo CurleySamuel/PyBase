@@ -53,10 +53,11 @@ def LocateMaster(zkquorum, establish_connection_timeout=5, missing_znode_retries
         if missing_znode_retries == 0:
             raise ZookeeperZNodeException(
                 "ZooKeeper does not contain meta-region-server node.")
-        logger.warn(
-            "ZooKeeper does not contain meta-region-server node. Retrying in 2 seconds. (%s retries remaining)", missing_znode_retries)
+        logger.warn("ZooKeeper does not contain meta-region-server node. Retrying in 2 seconds. "
+                    "(%s retries remaining)", missing_znode_retries)
         sleep(2.0)
-        return LocateMeta(zkquorum, establish_connection_timeout=establish_connection_timeout, missing_znode_retries=missing_znode_retries - 1, zk=zk)
+        return LocateMaster(zkquorum, establish_connection_timeout=establish_connection_timeout,
+                            missing_znode_retries=missing_znode_retries - 1, zk=zk)
     # We don't need to maintain a connection to ZK. If we need it again we'll
     # recreate the connection. A possible future implementation can subscribe
     # to ZK and listen for when RegionServers go down, then pre-emptively
@@ -84,8 +85,8 @@ def LocateMaster(zkquorum, establish_connection_timeout=5, missing_znode_retries
     magic = unpack(">I", rsp[meta_length + 5:meta_length + 9])[0]
     if magic != 1346524486:
         # 4 bytes: PBUF
-        raise ZookeeperResponseException(
-            "ZooKeeper returned an invalid response (are you running a version of HBase supporting Protobufs?)")
+        raise ZookeeperResponseException("ZooKeeper returned an invalid response (are you running "
+                                         "a version of HBase supporting Protobufs?)")
     rsp = rsp[meta_length + 9:]
     meta = MetaRegionServer()
     meta.ParseFromString(rsp)
