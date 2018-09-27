@@ -13,7 +13,10 @@
    See the License for the specific language governing permissions and
    limitations under the License.
 """
+from __future__ import absolute_import, print_function
+
 from struct import unpack
+
 from ..pb.HBase_pb2 import RegionInfo as pbRegionInfo
 
 
@@ -50,4 +53,3 @@ def region_from_cell(cell):
     start_key = region_info.start_key
     stop_key = region_info.end_key
     return Region(table, region_name, start_key, stop_key)
-

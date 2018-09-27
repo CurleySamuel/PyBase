@@ -13,21 +13,23 @@
    See the License for the specific language governing permissions and
    limitations under the License.
 """
-import socket
-from struct import pack, unpack
-from ..pb.RPC_pb2 import ConnectionHeader, RequestHeader, ResponseHeader
-from ..pb.Client_pb2 import GetResponse, MutateResponse, ScanResponse
-from ..helpers import varint
-from threading import Lock, Condition
-import logging
-from time import sleep
-from cStringIO import StringIO
-from ..exceptions import *
+from __future__ import absolute_import, print_function
 
-logger = logging.getLogger('pybase.' + __name__)
-logger.setLevel(logging.DEBUG)
+import logging
+import socket
+from cStringIO import StringIO
+from struct import pack, unpack
+from threading import Condition, Lock
+
+from ..exceptions import (NoSuchColumnFamilyException, NotServingRegionException, PyBaseException,
+                          RegionMovedException, RegionOpeningException, RegionServerException)
+from ..helpers import varint
+from ..pb.Client_pb2 import GetResponse, MutateResponse, ScanResponse
+from ..pb.RPC_pb2 import ConnectionHeader, RequestHeader, ResponseHeader
+
+logger = logging.getLogger(__name__)
 # socket.setdefaulttimeout interfers with gevent.
-#socket.setdefaulttimeout(2)
+# socket.setdefaulttimeout(2)
 
 # Used to encode and decode varints in a format protobuf expects.
 encoder = varint.encodeVarint
@@ -288,4 +290,3 @@ def _to_varint(val):
     temp = []
     encoder(temp.append, val)
     return "".join(temp)
-

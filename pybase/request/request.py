@@ -1,6 +1,8 @@
-from ..pb.Client_pb2 import GetRequest, MutateRequest, ScanRequest, Column, MutationProto
-from ..filters import _to_filter
+from __future__ import absolute_import, print_function
+
 from ..exceptions import MalformedFamilies, MalformedValues
+from ..filters import _to_filter
+from ..pb.Client_pb2 import Column, GetRequest, MutateRequest, MutationProto, ScanRequest
 
 # Table + Family used when requesting meta information from the
 # MetaRegionServer
@@ -164,4 +166,3 @@ def values_to_column_values(val, delete=False):
         return col_vals
     except Exception:
         raise MalformedValues()
-

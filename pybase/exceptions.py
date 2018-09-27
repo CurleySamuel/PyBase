@@ -13,13 +13,14 @@
    See the License for the specific language governing permissions and
    limitations under the License.
 """
+from __future__ import absolute_import, print_function
+
 import logging
-from time import sleep
-from threading import Condition, Lock, RLock, Semaphore
-from time import time
 from collections import defaultdict
-logger = logging.getLogger('pybase.' + __name__)
-logger.setLevel(logging.DEBUG)
+from threading import Lock, Semaphore
+from time import sleep, time
+
+logger = logging.getLogger(__name__)
 
 
 # All PyBase exceptions inherit from me. Assumes unrecoverable.

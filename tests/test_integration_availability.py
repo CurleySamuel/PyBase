@@ -1,9 +1,12 @@
-import unittest
-import pybase
-from collections import defaultdict
-from pybase.exceptions import *
-import subprocess
+from __future__ import absolute_import, print_function
+
 import os
+import subprocess
+import unittest
+from collections import defaultdict
+
+import pybase
+from pybase.exceptions import *
 
 # Please note that all below unit tests require the existence of a table
 # to play with. Table must contain two column families specified below as well.
@@ -109,14 +112,14 @@ def hbase_shell(cmd):
 
 
 def start_region_servers(server_ids):
-    print ""
+    print("")
     a = [os.environ['HBASE_HOME'] + "/bin/local-regionservers.sh",
          "start", ' '.join(server_ids)]
     subprocess.call(a)
 
 
 def stop_region_servers(server_ids):
-    print ""
+    print("")
     a = [os.environ['HBASE_HOME'] + "/bin/local-regionservers.sh",
          "stop", ' '.join(server_ids)]
     subprocess.call(a)

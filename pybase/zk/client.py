@@ -13,14 +13,20 @@
    See the License for the specific language governing permissions and
    limitations under the License.
 """
-from kazoo.client import KazooClient
-from kazoo.handlers.threading import KazooTimeoutError
-from kazoo.exceptions import NoNodeError
-from ..pb.ZooKeeper_pb2 import MetaRegionServer
-from ..exceptions import *
+from __future__ import absolute_import, print_function
+
+import logging
 from struct import unpack
 from time import sleep
-import logging
+
+from kazoo.client import KazooClient
+from kazoo.exceptions import NoNodeError
+from kazoo.handlers.threading import KazooTimeoutError
+
+from ..exceptions import (ZookeeperConnectionException,
+                          ZookeeperResponseException, ZookeeperZNodeException)
+from ..pb.ZooKeeper_pb2 import MetaRegionServer
+
 logger = logging.getLogger('pybase.' + __name__)
 logger.setLevel(logging.DEBUG)
 
@@ -86,4 +92,3 @@ def LocateMaster(zkquorum, establish_connection_timeout=5, missing_znode_retries
     logger.info('Discovered Master at %s:%s',
                 meta.server.host_name, meta.server.port)
     return meta.server.host_name, meta.server.port
-

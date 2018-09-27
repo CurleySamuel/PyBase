@@ -13,22 +13,28 @@
    See the License for the specific language governing permissions and
    limitations under the License.
 """
-import zk.client as zk
-import region.client as region
-from region.region import region_from_cell
-from request import request
+from __future__ import absolute_import, print_function
+
 import logging
 import logging.config
-from intervaltree import IntervalTree
-from threading import Lock
-from time import sleep
 from itertools import chain
+from threading import Lock
+
+import pybase.region.client as region
+import pybase.zk.client as zk
+from intervaltree import IntervalTree
+
 from filters import _to_filter
-from exceptions import *
+
+from .exceptions import (MasterServerException, NoSuchTableException,
+                         PyBaseException, RegionException, RegionServerException)
+from .region.region import region_from_cell
+from .request import request
 
 # Using a tiered logger such that all submodules propagate through to this
 # logger. Changing the logging level here should affect all other modules.
 logger = logging.getLogger('pybase')
+
 
 class MainClient:
 
@@ -484,4 +490,3 @@ def NewClient(zkquorum, socket_pool_size=1):
     # Create the master client.
     a._recreate_master_client()
     return a
-

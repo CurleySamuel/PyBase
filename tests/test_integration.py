@@ -1,9 +1,11 @@
+from __future__ import absolute_import, print_function
+
 import unittest
-import pybase
 from collections import defaultdict
 from time import sleep
-from pybase.exceptions import *
 
+import pybase
+from pybase.exceptions import *
 
 # Please note that all below unit tests require the existence of a table
 # to play with. Table must contain two column families specified below as well.

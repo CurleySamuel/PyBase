@@ -13,10 +13,13 @@
    See the License for the specific language governing permissions and
    limitations under the License.
 """
+from __future__ import absolute_import, print_function
+
 import traceback
-import pb.Filter_pb2 as pbFilter
-import pb.Comparator_pb2 as pbComparator
-from pb.HBase_pb2 import BytesBytesPair as pbBytesBytesPair
+
+from .pb import Comparator_pb2 as pbComparator
+from .pb import Filter_pb2 as pbFilter
+from .pb.HBase_pb2 import BytesBytesPair as pbBytesBytesPair
 
 # You're brave to venture into this file.
 
@@ -495,4 +498,3 @@ def _to_row_range(rr):
         return new
     except Exception:
         raise ValueError("Malformed RowRange provided")
-
