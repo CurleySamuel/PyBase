@@ -17,10 +17,7 @@ from __future__ import absolute_import, print_function
 
 import logging
 import socket
-try:
-    from io import StringIO
-except ImportError:
-    from cStringIO import StringIO
+from io import BytesIO
 from struct import pack, unpack
 from threading import Condition, Lock
 
@@ -235,7 +232,7 @@ class Client:
     # received. If a socket is closed (RegionServer died) then raise an
     # exception that goes all the way back to the main client
     def _recv_n(self, sock, n):
-        partial_str = StringIO()
+        partial_str = BytesIO()
         partial_len = 0
         while partial_len < n:
             packet = sock.recv(n - partial_len)
