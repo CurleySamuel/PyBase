@@ -9,4 +9,13 @@ setup(name='pybase',
       license='Apache License 2.0',
       packages=find_packages('.', exclude=['tests']),
       install_requires=["intervaltree", "kazoo", "six", "zope.interface", "protobuf"],
+      classifiers=[
+          "Programming Language :: Python",
+          "Programming Language :: Python :: 2",
+          "Programming Language :: Python :: 2.7",
+          "Programming Language :: Python :: 3",
+          "Programming Language :: Python :: 3.4",
+          "Programming Language :: Python :: 3.5",
+          "Programming Language :: Python :: 3.6",
+      ],
       zip_safe=False)
