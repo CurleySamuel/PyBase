@@ -13,7 +13,7 @@
    See the License for the specific language governing permissions and
    limitations under the License.
 """
-from __future__ import absolute_import, print_function
+from __future__ import absolute_import, print_function, unicode_literals
 
 import logging
 import logging.config
@@ -62,15 +62,15 @@ class MainClient:
 
     def _add_to_region_cache(self, new_region):
         stop_key = new_region.stop_key
-        if stop_key == '':
+        if stop_key == b'':
             # This is hacky but our interval tree requires hard interval stops.
             # So what's the largest char out there? chr(255) -> '\xff'. If
             # you're using '\xff' as a prefix for your rows then this'll cause
             # a cache miss on every request.
-            stop_key = '\xff'
+            stop_key = b'\xff'
         # Keys are formatted like: 'tablename,key'
-        start_key = new_region.table + ',' + new_region.start_key
-        stop_key = new_region.table + ',' + stop_key
+        start_key = new_region.table + b',' + new_region.start_key
+        stop_key = new_region.table + b',' + stop_key
 
         # Only let one person touch the cache at once.
         with self._cache_lock:
@@ -106,7 +106,7 @@ class MainClient:
     def _delete_from_region_cache(self, table, start_key):
         # Don't acquire the lock because the calling function should have done
         # so already
-        self.region_cache.remove_overlap(table + "," + start_key)
+        self.region_cache.remove_overlap(table + b"," + start_key)
 
     """
         HERE LAY REQUESTS
@@ -218,7 +218,7 @@ class MainClient:
                 # recursive scan it rescanned whatever the first_response
                 # initially contained. Appending both will produce duplicates.
                 previous_stop_key = cur_region.stop_key
-                if previous_stop_key == '' or \
+                if previous_stop_key == b'' or \
                         (stop_key is not None and previous_stop_key > stop_key):
                     break
                 continue
@@ -426,7 +426,7 @@ class MainClient:
                 pass
 
     def _construct_meta_key(self, table, key):
-        return table + "," + key + ",:"
+        return table + b"," + key + b",:"
 
     def close(self):
         logger.info("Main client received close request.")

@@ -13,7 +13,7 @@
    See the License for the specific language governing permissions and
    limitations under the License.
 """
-from __future__ import absolute_import, print_function
+from __future__ import absolute_import, print_function, unicode_literals
 
 import logging
 import socket
@@ -181,7 +181,7 @@ class Client:
             # call_ids don't match? Looks like a different thread nabbed our
             # response.
             return self._bad_call_id(call_id, rq, header.call_id, full_data)
-        elif header.exception.exception_class_name != u'':
+        elif header.exception.exception_class_name != '':
             # If we're in here it means a remote exception has happened.
             exception_class = header.exception.exception_class_name
             if exception_class in \
@@ -293,4 +293,4 @@ def _send_hello(sock):
 def _to_varint(val):
     temp = []
     encoder(temp.append, val)
-    return "".join(temp)
+    return b"".join(temp)

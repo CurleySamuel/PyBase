@@ -13,7 +13,7 @@
    See the License for the specific language governing permissions and
    limitations under the License.
 """
-from __future__ import absolute_import, print_function
+from __future__ import absolute_import, print_function, unicode_literals
 
 import logging
 from struct import unpack
@@ -72,7 +72,7 @@ def LocateMaster(zkquorum, establish_connection_timeout=5, missing_znode_retries
     # The first byte must be \xff and the next four bytes are a little-endian
     # uint32 containing the length of the meta.
     first_byte, meta_length = unpack(">cI", rsp[:5])
-    if first_byte != '\xff':
+    if first_byte != b'\xff':
         # Malformed response
         raise ZookeeperResponseException(
             "ZooKeeper returned an invalid response")

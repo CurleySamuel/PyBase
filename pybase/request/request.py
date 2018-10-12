@@ -1,4 +1,4 @@
-from __future__ import absolute_import, print_function
+from __future__ import absolute_import, print_function, unicode_literals
 
 from ..exceptions import MalformedFamilies, MalformedValues
 from ..filters import _to_filter
@@ -6,8 +6,8 @@ from ..pb.Client_pb2 import Column, GetRequest, MutateRequest, MutationProto, Sc
 
 # Table + Family used when requesting meta information from the
 # MetaRegionServer
-metaTableName = "hbase:meta,,1"
-metaInfoFamily = {"info": []}
+metaTableName = b"hbase:meta,,1"
+metaInfoFamily = {b"info": []}
 
 
 class Request:
@@ -24,7 +24,7 @@ def master_request(meta_key):
     rq.get.closest_row_before = True
     rq.region.type = 1
     rq.region.value = metaTableName
-    return Request("Get", rq)
+    return Request(b"Get", rq)
 
 
 def get_request(region, key, families, filters):
@@ -36,7 +36,7 @@ def get_request(region, key, families, filters):
     rq.region.value = region.region_name
     if pbFilter is not None:
         rq.get.filter.CopyFrom(pbFilter)
-    return Request("Get", rq)
+    return Request(b"Get", rq)
 
 
 def put_request(region, key, values):
@@ -46,7 +46,7 @@ def put_request(region, key, values):
     rq.mutation.row = key
     rq.mutation.mutate_type = 2
     rq.mutation.column_value.extend(values_to_column_values(values))
-    return Request("Mutate", rq)
+    return Request(b"Mutate", rq)
 
 
 def delete_request(region, key, values):
@@ -57,7 +57,7 @@ def delete_request(region, key, values):
     rq.mutation.mutate_type = 3
     rq.mutation.column_value.extend(
         values_to_column_values(values, delete=True))
-    return Request("Mutate", rq)
+    return Request(b"Mutate", rq)
 
 
 def append_request(region, key, values):
@@ -67,7 +67,7 @@ def append_request(region, key, values):
     rq.mutation.row = key
     rq.mutation.mutate_type = 0
     rq.mutation.column_value.extend(values_to_column_values(values))
-    return Request("Mutate", rq)
+    return Request(b"Mutate", rq)
 
 
 def increment_request(region, key, values):
@@ -77,7 +77,7 @@ def increment_request(region, key, values):
     rq.mutation.row = key
     rq.mutation.mutate_type = 1
     rq.mutation.column_value.extend(values_to_column_values(values))
-    return Request("Mutate", rq)
+    return Request(b"Mutate", rq)
 
 
 def scan_request(region, start_key, stop_key, families, filters, close, scanner_id):
@@ -89,14 +89,14 @@ def scan_request(region, start_key, stop_key, families, filters, close, scanner_
         rq.close_scanner = close
     if scanner_id is not None:
         rq.scanner_id = int(scanner_id)
-        return Request("Scan", rq)
+        return Request(b"Scan", rq)
     rq.scan.column.extend(families_to_columns(families))
     rq.scan.start_row = start_key
     if stop_key is not None:
         rq.scan.stop_row = stop_key
     if filters is not None:
         rq.scan.filter.CopyFrom(filters)
-    return Request("Scan", rq)
+    return Request(b"Scan", rq)
 
 
 #  Converts a dictionary specifying ColumnFamilys -> Qualifiers into the Column pb type.
