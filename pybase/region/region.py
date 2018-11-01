@@ -20,7 +20,7 @@ from struct import unpack
 from ..pb.HBase_pb2 import RegionInfo as pbRegionInfo
 
 
-class Region:
+class Region(object):
 
     def __init__(self, table, name, start, stop):
         self.table = table

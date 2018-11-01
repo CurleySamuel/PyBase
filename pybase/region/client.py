@@ -46,7 +46,7 @@ response_types = {
 
 # This Client is created once per RegionServer. Handles all communication
 # to and from this specific RegionServer.
-class Client:
+class Client(object):
     # Variables are as follows:
     #   - Host: The hostname of the RegionServer
     #   - Port: The port of the RegionServer

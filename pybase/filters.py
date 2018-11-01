@@ -48,7 +48,7 @@ NO_OP = 6
 # A FilterList is also a Filter. But it's also a list of Filters with an
 # operator. This allows you to build up complicated boolean expressions by
 # chaining FilterLists.
-class FilterList:
+class FilterList(object):
 
     def __init__(self, operator, *arg):
         self.filter_type = pbFilter.FilterList
@@ -62,7 +62,7 @@ class FilterList:
             self.filters.append(_to_filter(new_filter))
 
 
-class ColumnCountGetFilter:
+class ColumnCountGetFilter(object):
 
     def __init__(self, limit):
         self.filter_type = pbFilter.ColumnCountGetFilter
@@ -70,7 +70,7 @@ class ColumnCountGetFilter:
         self.limit = limit
 
 
-class ColumnPaginationFilter:
+class ColumnPaginationFilter(object):
 
     def __init__(self, limit, offset, column_offset):
         self.filter_type = pbFilter.ColumnPaginationFilter
@@ -80,7 +80,7 @@ class ColumnPaginationFilter:
         self.column_offset = column_offset
 
 
-class ColumnPrefixFilter:
+class ColumnPrefixFilter(object):
 
     def __init__(self, prefix):
         self.filter_type = pbFilter.ColumnPrefixFilter
@@ -88,7 +88,7 @@ class ColumnPrefixFilter:
         self.prefix = prefix
 
 
-class ColumnRangeFilter:
+class ColumnRangeFilter(object):
 
     def __init__(self, min_column, min_column_inclusive, max_column, max_column_inclusive):
         self.filter_type = pbFilter.ColumnRangeFilter
@@ -99,7 +99,7 @@ class ColumnRangeFilter:
         self.max_column_inclusive = max_column_inclusive
 
 
-class CompareFilter:
+class CompareFilter(object):
 
     def __init__(self, compare_op, comparator):
         self.filter_type = pbFilter.CompareFilter
@@ -108,7 +108,7 @@ class CompareFilter:
         self.comparator = _to_comparator(comparator)
 
 
-class DependentColumnFilter:
+class DependentColumnFilter(object):
 
     def __init__(self, compare_filter, column_family, column_qualifier, drop_dependent_column):
         self.filter_type = pbFilter.DependentColumnFilter
@@ -119,7 +119,7 @@ class DependentColumnFilter:
         self.drop_dependent_column = drop_dependent_column
 
 
-class FamilyFilter:
+class FamilyFilter(object):
 
     def __init__(self, compare_filter):
         self.filter_type = pbFilter.FamilyFilter
@@ -127,7 +127,7 @@ class FamilyFilter:
         self.compare_filter = _to_filter(compare_filter)
 
 
-class FilterWrapper:
+class FilterWrapper(object):
 
     def __init__(self, new_filter):
         self.filter_type = pbFilter.FilterWrapper
@@ -135,14 +135,14 @@ class FilterWrapper:
         self.filter = _to_filter(new_filter)
 
 
-class FirstKeyOnlyFilter:
+class FirstKeyOnlyFilter(object):
 
     def __init__(self):
         self.filter_type = pbFilter.FirstKeyOnlyFilter
         self.name = filter_path + "FirstKeyOnlyFilter"
 
 
-class FirstKeyValueMatchingQualifiersFilter:
+class FirstKeyValueMatchingQualifiersFilter(object):
 
     def __init__(self, qualifiers):
         self.filter_type = pbFilter.FirstKeyValueMatchingQualifiersFilter
@@ -150,7 +150,7 @@ class FirstKeyValueMatchingQualifiersFilter:
         self.qualifiers = qualifiers
 
 
-class FuzzyRowFilter:
+class FuzzyRowFilter(object):
 
     def __init__(self, fuzzy_keys_data):
         self.filter_type = pbFilter.FuzzyRowFilter
@@ -164,7 +164,7 @@ class FuzzyRowFilter:
             self.fuzzy_keys_data.append(_to_bytes_bytes_pair(fuzzy_keys_data))
 
 
-class InclusiveStopFilter:
+class InclusiveStopFilter(object):
 
     def __init__(self, stop_row_key):
         self.filter_type = pbFilter.InclusiveStopFilter
@@ -172,7 +172,7 @@ class InclusiveStopFilter:
         self.stop_row_key = stop_row_key
 
 
-class KeyOnlyFilter:
+class KeyOnlyFilter(object):
 
     def __init__(self, len_as_val):
         self.filter_type = pbFilter.KeyOnlyFilter
@@ -180,7 +180,7 @@ class KeyOnlyFilter:
         self.len_as_val = len_as_val
 
 
-class MultipleColumnPrefixFilter:
+class MultipleColumnPrefixFilter(object):
 
     def __init__(self, sorted_prefixes):
         self.filter_type = pbFilter.MultipleColumnPrefixFilter
@@ -191,7 +191,7 @@ class MultipleColumnPrefixFilter:
             self.sorted_prefixes = [sorted_prefixes]
 
 
-class PageFilter:
+class PageFilter(object):
 
     def __init__(self, page_size):
         self.filter_type = pbFilter.PageFilter
@@ -199,7 +199,7 @@ class PageFilter:
         self.page_size = page_size
 
 
-class PrefixFilter:
+class PrefixFilter(object):
 
     def __init__(self, prefix):
         self.filter_type = pbFilter.PrefixFilter
@@ -207,7 +207,7 @@ class PrefixFilter:
         self.prefix = prefix
 
 
-class QualifierFilter:
+class QualifierFilter(object):
 
     def __init__(self, compare_filter):
         self.filter_type = pbFilter.QualifierFilter
@@ -215,7 +215,7 @@ class QualifierFilter:
         self.compare_filter = _to_pb_filter(compare_filter)
 
 
-class RandomRowFilter:
+class RandomRowFilter(object):
 
     def __init__(self, chance):
         self.filter_type = pbFilter.RandomRowFilter
@@ -223,7 +223,7 @@ class RandomRowFilter:
         self.chance = chance
 
 
-class RowFilter:
+class RowFilter(object):
 
     def __init__(self, compare_filter):
         self.filter_type = pbFilter.RowFilter
@@ -231,7 +231,7 @@ class RowFilter:
         self.compare_filter = _to_filter(compare_filter)
 
 
-class SkipColumnValueExcludeFilter:
+class SkipColumnValueExcludeFilter(object):
 
     def __init__(self, single_column_value_filter):
         self.filter_type = pbFilter.SkipColumnValueExcludeFilter
@@ -240,7 +240,7 @@ class SkipColumnValueExcludeFilter:
             single_column_value_filter)
 
 
-class SkipColumnValueFilter:
+class SkipColumnValueFilter(object):
 
     def __init__(self, compare_op, comparator, column_family, column_qualifier, filter_if_missing,
                  latest_version_only):
@@ -254,7 +254,7 @@ class SkipColumnValueFilter:
         self.latest_version_only = latest_version_only
 
 
-class SkipFilter:
+class SkipFilter(object):
 
     def __init__(self, orig_filter):
         self.filter_type = pbFilter.SkipFilter
@@ -262,7 +262,7 @@ class SkipFilter:
         self.filter = orig_filter
 
 
-class TimestampsFilter:
+class TimestampsFilter(object):
 
     def __init__(self, timestamps):
         self.filter_type = pbFilter.TimestampsFilter
@@ -273,7 +273,7 @@ class TimestampsFilter:
             self.timestamps = [timestamps]
 
 
-class ValueFilter:
+class ValueFilter(object):
 
     def __init__(self, compare_filter):
         self.filter_type = pbFilter.ValueFilter
@@ -281,7 +281,7 @@ class ValueFilter:
         self.compare_filter = _to_filter(compare_filter)
 
 
-class WhileMatchFilter:
+class WhileMatchFilter(object):
 
     def __init__(self, origFilter):
         self.filter_type = pbFilter.WhileMatchFilter
@@ -289,14 +289,14 @@ class WhileMatchFilter:
         self.filter = _to_filter(origFilter)
 
 
-class FilterAllFilter:
+class FilterAllFilter(object):
 
     def __init__(self):
         self.filter_type = pbFilter.FilterAllFilter
         self.name = filter_path + "FilterAllFilter"
 
 
-class MultiRowRangeFilter:
+class MultiRowRangeFilter(object):
 
     def __init__(self, row_range_list):
         self.filter_type = pbFilter.MultiRowRangeFilter
@@ -353,7 +353,7 @@ def _to_pb_filter(orig_filter):
         raise ValueError("Malformed Filter provided, %s %s" % (ex, traceback.format_exc()))
 
 
-class ByteArrayComparable:
+class ByteArrayComparable(object):
 
     def __init__(self, value):
         self.comparable_type = pbComparator.ByteArrayComparable
@@ -376,7 +376,7 @@ def _to_comparable(orig_cmp):
         raise ValueError("Malformed Comparable provided %s %s" % (ex, traceback.format_exc()))
 
 
-class BinaryComparator:
+class BinaryComparator(object):
 
     def __init__(self, comparable):
         self.comparator_type = pbComparator.BinaryComparator
@@ -384,7 +384,7 @@ class BinaryComparator:
         self.comparable = _to_comparable(comparable)
 
 
-class LongComparator:
+class LongComparator(object):
 
     def __init__(self, comparable):
         self.comparator_type = pbComparator.LongComparator
@@ -392,7 +392,7 @@ class LongComparator:
         self.comparable = _to_comparable(comparable)
 
 
-class BinaryPrefixComparator:
+class BinaryPrefixComparator(object):
 
     def __init__(self, comparable):
         self.comparator_type = pbComparator.BinaryPrefixComparator
@@ -400,7 +400,7 @@ class BinaryPrefixComparator:
         self.comparable = _to_comparable(comparable)
 
 
-class BitComparator:
+class BitComparator(object):
 
     def __init__(self, comparable, bitwise_op):
         self.comparator_type = pbComparator.BitComparator
@@ -409,14 +409,14 @@ class BitComparator:
         self.bitwise_op = bitwise_op
 
 
-class NullComparator:
+class NullComparator(object):
 
     def __init__(self):
         self.comparator_type = pbComparator.NullComparator
         self.name = comparator_path + "NullComparator"
 
 
-class RegexStringComparator:
+class RegexStringComparator(object):
 
     def __init__(self, pattern, pattern_flags, charset, engine):
         self.comparator_type = pbComparator.RegexStringComparator
@@ -427,7 +427,7 @@ class RegexStringComparator:
         self.engine = engine
 
 
-class StringComparator:
+class StringComparator(object):
 
     def __init__(self, substr):
         self.comparator_type = pbComparator.BinaryPrefixComparator
@@ -459,7 +459,7 @@ def _to_comparator(orig_cmp):
         raise ValueError("Malformed Comparator provided %s %s" % (ex, traceback.format_exc()))
 
 
-class BytesBytesPair:
+class BytesBytesPair(object):
 
     def __init__(self, first, second):
         self.first = first
@@ -476,7 +476,7 @@ def _to_bytes_bytes_pair(bbp):
         raise ValueError("Malformed BytesBytesPair provided")
 
 
-class RowRange:
+class RowRange(object):
 
     def __init__(self, start_row, start_row_inclusive, stop_row, stop_row_inclusive):
         self.filter_type = pbFilter.RowRange

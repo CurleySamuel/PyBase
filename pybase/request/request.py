@@ -10,7 +10,7 @@ metaTableName = b"hbase:meta,,1"
 metaInfoFamily = {b"info": []}
 
 
-class Request:
+class Request(object):
 
     def __init__(self, type, pb):  # noqa: B002
         self.type = type

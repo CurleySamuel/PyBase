@@ -35,7 +35,7 @@ from .request import request
 logger = logging.getLogger('pybase')
 
 
-class MainClient:
+class MainClient(object):
 
     def __init__(self, zkquorum, pool_size):
         # Location of the ZooKeeper quorum (csv)
@@ -441,7 +441,7 @@ class MainClient:
         self.reverse_client_cache = {}
 
 
-class Result:
+class Result(object):
 
     # Called like Result(my_response), takes all the wanted data from
     # my_response and puts it into our own result structure.
