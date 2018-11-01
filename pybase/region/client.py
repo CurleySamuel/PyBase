@@ -28,8 +28,6 @@ from ..pb.Client_pb2 import GetResponse, MutateResponse, ScanResponse
 from ..pb.RPC_pb2 import ConnectionHeader, RequestHeader, ResponseHeader
 
 logger = logging.getLogger(__name__)
-# socket.setdefaulttimeout interfers with gevent.
-# socket.setdefaulttimeout(2)
 
 # Used to encode and decode varints in a format protobuf expects.
 encoder = varint.encodeVarint

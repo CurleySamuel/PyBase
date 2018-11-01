@@ -16,7 +16,6 @@
 from __future__ import absolute_import, print_function, unicode_literals
 
 import logging
-import logging.config
 from itertools import chain
 from threading import Lock
 
@@ -30,9 +29,7 @@ from .filters import _to_filter
 from .region.region import region_from_cell
 from .request import request
 
-# Using a tiered logger such that all submodules propagate through to this
-# logger. Changing the logging level here should affect all other modules.
-logger = logging.getLogger('pybase')
+logger = logging.getLogger(__name__)
 
 
 class MainClient(object):

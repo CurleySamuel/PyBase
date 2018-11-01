@@ -27,8 +27,7 @@ from ..exceptions import (ZookeeperConnectionException,
                           ZookeeperResponseException, ZookeeperZNodeException)
 from ..pb.ZooKeeper_pb2 import MetaRegionServer
 
-logger = logging.getLogger('pybase.' + __name__)
-logger.setLevel(logging.DEBUG)
+logger = logging.getLogger(__name__)
 
 znode = "/hbase"
 
