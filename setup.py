@@ -3,14 +3,15 @@ from __future__ import unicode_literals
 from setuptools import find_packages, setup
 
 setup(name='pybase',
-      version='0.2.1',
+      version='0.3.0',
       description='Native python client to hbase 1.0+',
       url='https://github.com/CurleySamuel/PyBase',
       author='Sam Curley',
       author_email='CurleySamuel@gmail.com',
       license='Apache License 2.0',
       packages=find_packages('.', exclude=['tests']),
-      install_requires=["intervaltree", "kazoo", "six", "zope.interface", "protobuf"],
+      install_requires=["intervaltree  >= 3.0, < 4.0",
+                        "kazoo", "six", "zope.interface", "protobuf"],
       classifiers=[
           "Programming Language :: Python",
           "Programming Language :: Python :: 2",
