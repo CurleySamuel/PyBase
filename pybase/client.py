@@ -227,7 +227,7 @@ class MainClient(object):
             previous_stop_key = cur_region.stop_key
             # Stopping criteria. This region is either the end ('') or the end of this region is
             # beyond the specific stop_key.
-            if previous_stop_key == '' or (stop_key is not None and previous_stop_key > stop_key):
+            if previous_stop_key == b'' or (stop_key is not None and previous_stop_key > stop_key):
                 break
         return result_set
 

@@ -282,7 +282,7 @@ def _send_hello(sock):
     #   1. "HBas\x00\x50". Magic prefix that HBase requires.
     #   2. Little-endian uint32 indicating length of serialized ConnectionHeader
     #   3. Serialized ConnectionHeader
-    message = "HBas\x00\x50" + pack(">I", len(serialized)) + serialized
+    message = b"HBas\x00\x50" + pack(">I", len(serialized)) + serialized
     sock.send(message)
 
 
