@@ -36,9 +36,9 @@ decoder = varint.decodeVarint
 # We need to know how to interpret an incoming proto.Message. This maps
 # the request_type to the response_type.
 response_types = {
-    "Get": GetResponse,
-    "Mutate": MutateResponse,
-    "Scan": ScanResponse
+    b"Get": GetResponse,
+    b"Mutate": MutateResponse,
+    b"Scan": ScanResponse
 }
 
 
@@ -291,4 +291,4 @@ def _send_hello(sock):
 def _to_varint(val):
     temp = []
     encoder(temp.append, val)
-    return b"".join(temp)
+    return "".join(temp).encode('utf8')

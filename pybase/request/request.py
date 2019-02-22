@@ -1,5 +1,7 @@
 from __future__ import absolute_import, print_function, unicode_literals
 
+from builtins import str
+
 from ..exceptions import MalformedFamilies, MalformedValues
 from ..filters import _to_filter
 from ..pb.Client_pb2 import Column, GetRequest, MutateRequest, MutationProto, ScanRequest
@@ -18,6 +20,8 @@ class Request(object):
 
 
 def master_request(meta_key):
+    if isinstance(meta_key, str):
+        meta_key = meta_key.encode('utf8')
     rq = GetRequest()
     rq.get.row = meta_key
     rq.get.column.extend(families_to_columns(metaInfoFamily))

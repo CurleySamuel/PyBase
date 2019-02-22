@@ -29,77 +29,70 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 from __future__ import absolute_import, print_function, unicode_literals
 
+import six
 
 class NotEnoughDataExcption(Exception):
     pass
 
 
-def _VarintDecoder(mask):
-    """Return an encoder for a basic varint value (does not include tag).
+def _VarintDecoder(mask, result_type=int):
+  """Return an encoder for a basic varint value (does not include tag).
+  Decoded values will be bitwise-anded with the given mask before being
+  returned, e.g. to limit them to 32 bits.  The returned decoder does not
+  take the usual "end" parameter -- the caller is expected to do bounds checking
+  after the fact (often the caller can defer such checking until later).  The
+  decoder returns a (value, new_pos) pair.
+  """
 
-    Decoded values will be bitwise-anded with the given mask before being
-    returned, e.g. to limit them to 32 bits.  The returned decoder does not
-    take the usual "end" parameter -- the caller is expected to do bounds checking
-    after the fact (often the caller can defer such checking until later).  The
-    decoder returns a (value, new_pos) pair.
-    """
-
-    local_ord = ord
-
-    def DecodeVarint(buffer, pos):
-        result = 0
-        shift = 0
-        while 1:
-            if pos > len(buffer) - 1:
-                raise NotEnoughDataExcption("Not enough data to decode varint")
-            b = local_ord(buffer[pos])
-            result |= ((b & 0x7f) << shift)
-            pos += 1
-            if not (b & 0x80):
-                result &= mask
-                return (result, pos)
-            shift += 7
-            if shift >= 64:
-                raise ValueError('Too many bytes when decoding varint.')
-
-    return DecodeVarint
+  def DecodeVarint(buffer, pos):
+    result = 0
+    shift = 0
+    while 1:
+      b = six.indexbytes(buffer, pos)
+      result |= ((b & 0x7f) << shift)
+      pos += 1
+      if not (b & 0x80):
+        result &= mask
+        result = result_type(result)
+        return (result, pos)
+      shift += 7
+      if shift >= 64:
+        raise ValueError('Too many bytes when decoding varint.')
+  return DecodeVarint
 
 
-def _SignedVarintDecoder(mask):
-    """Like _VarintDecoder() but decodes signed values."""
+def _SignedVarintDecoder(bits, result_type=int):
+  """Like _VarintDecoder() but decodes signed values."""
 
-    local_ord = ord
+  signbit = 1 << (bits - 1)
+  mask = (1 << bits) - 1
 
-    def DecodeVarint(buffer, pos):
-        result = 0
-        shift = 0
-        while 1:
-            if pos > len(buffer) - 1:
-                raise NotEnoughDataExcption("Not enough data to decode varint")
-            b = local_ord(buffer[pos])
-            result |= ((b & 0x7f) << shift)
-            pos += 1
-            if not (b & 0x80):
-                if result > 0x7fffffffffffffff:
-                    result -= (1 << 64)
-                    result |= ~mask
-                else:
-                    result &= mask
-                return (result, pos)
-            shift += 7
-            if shift >= 64:
-                raise ValueError('Too many bytes when decoding varint.')
+  def DecodeVarint(buffer, pos):
+    result = 0
+    shift = 0
+    while 1:
+      b = six.indexbytes(buffer, pos)
+      result |= ((b & 0x7f) << shift)
+      pos += 1
+      if not (b & 0x80):
+        result &= mask
+        result = (result ^ signbit) - signbit
+        result = result_type(result)
+        return (result, pos)
+      shift += 7
+      if shift >= 64:
+        raise ValueError('Too many bytes when decoding varint.')
+  return DecodeVarint
 
-    return DecodeVarint
 
 
 decodeVarint = _VarintDecoder((1 << 64) - 1)
-decodeSignedVarint = _SignedVarintDecoder((1 << 64) - 1)
 
+decodeSignedVarint = _SignedVarintDecoder(64, int)
 
 # Use these versions for values which must be limited to 32 bits.
 decodeVarint32 = _VarintDecoder((1 << 32) - 1)
-decodeSignedVarint32 = _SignedVarintDecoder((1 << 32) - 1)
+decodeSignedVarint32 = _SignedVarintDecoder(32, int)
 
 
 def varintSize(value):
