@@ -291,4 +291,4 @@ def _send_hello(sock):
 def _to_varint(val):
     temp = []
     encoder(temp.append, val)
-    return "".join(temp).encode('utf8')
+    return b"".join(temp)
