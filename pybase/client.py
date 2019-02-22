@@ -16,6 +16,7 @@
 from __future__ import absolute_import, print_function, unicode_literals
 
 import logging
+from builtins import str
 from itertools import chain
 from threading import Lock
 
@@ -341,15 +342,15 @@ class MainClient(object):
         # We get ~4 cells back each holding different information. We only care
         # about two of them.
         for cell in cells:
-            if cell.qualifier == "regioninfo":
+            if cell.qualifier == b"regioninfo":
                 # Take the regioninfo information and parse it into our own
                 # Region representation.
                 new_region = region_from_cell(cell)
-            elif cell.qualifier == "server":
+            elif cell.qualifier == b"server":
                 # Grab the host, port of the Region Server that this region is
                 # hosted on.
                 server_loc = cell.value
-                host, port = cell.value.split(':')
+                host, port = cell.value.split(b':')
             else:
                 continue
         # Do we have an existing client for this region server already?
@@ -423,7 +424,11 @@ class MainClient(object):
                 pass
 
     def _construct_meta_key(self, table, key):
-        return table + b"," + key + b",:"
+        if isinstance(table, str):
+            table = table.encode('utf8')
+        if isinstance(key, str):
+            key = key.encode('utf8')
+        return b"%b,%b,:" % (table, key)
 
     def close(self):
         logger.info("Main client received close request.")
