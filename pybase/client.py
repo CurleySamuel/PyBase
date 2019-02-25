@@ -428,7 +428,7 @@ class MainClient(object):
             table = table.encode('utf8')
         if isinstance(key, str):
             key = key.encode('utf8')
-        return b"%b,%b,:" % (table, key)
+        return table + b',' + key + b',:'
 
     def close(self):
         logger.info("Main client received close request.")
