@@ -32,7 +32,7 @@ class PyBaseException(Exception):
     # unrecoverable and thus the _handle method
     # just reraises the exception.
     def _handle_exception(self, main_client, **kwargs):
-        raise self.__class__(self.message)
+        raise self.__class__(str(self))
 
 
 # Parent of any exceptions involving Zookeeper
@@ -137,7 +137,7 @@ class MasterMalformedResponseException(MasterServerException):
         self.port = port
 
     def _handle_exception(self, main_client, **kwargs):
-        raise self.__class__(self.message)
+        raise self.__class__(str(self))
 
 
 # All region exceptions inherit from me.
