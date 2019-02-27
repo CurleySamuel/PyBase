@@ -410,7 +410,7 @@ class MainClient(object):
             for reg in region_client.regions:
                 self._delete_from_region_cache(reg.table, reg.start_key)
             self.reverse_client_cache.pop(
-                region_client.host + ":" + region_client.port, None)
+                region_client.host + b":" + region_client.port, None)
             region_client.close()
 
     def _purge_region(self, reg):

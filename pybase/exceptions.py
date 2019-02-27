@@ -21,6 +21,8 @@ from functools import reduce
 from threading import Lock, Semaphore
 from time import sleep, time
 
+from builtins import str
+
 logger = logging.getLogger(__name__)
 
 
@@ -64,15 +66,15 @@ class ZookeeperResponseException(ZookeeperException):
 class RegionServerException(PyBaseException):
 
     def __init__(self, host=None, port=None, region_client=None):
-        self.host = host
-        self.port = port
+        self.host = host.encode('utf8') if isinstance(host, str) else host
+        self.port = port.encode('utf8') if isinstance(port, str) else port
         self.region_client = region_client
 
     def _handle_exception(self, main_client, **kwargs):
         # region_client not set? Then host/port must have been. Fetch the
         # client given the host, port
         if self.region_client is None:
-            concat = self.host + ":" + self.port
+            concat = self.host + b":" + self.port
             self.region_client = main_client.reverse_client_cache.get(
                 concat, None)
         # Let one greenlet through per region_client (returns True otherwise
@@ -82,7 +84,7 @@ class RegionServerException(PyBaseException):
                 if self.region_client is not None:
                     # We need to make sure that a different thread hasn't already
                     # reestablished to this region.
-                    loc = self.region_client.host + ":" + self.region_client.port
+                    loc = self.region_client.host + b":" + self.region_client.port
                     if loc in main_client.reverse_client_cache:
                         # We're the first in and it's our job to kill the client.
                         # Purge it.
@@ -92,7 +94,7 @@ class RegionServerException(PyBaseException):
                         main_client._purge_client(self.region_client)
                         # Sleep for an arbitrary amount of time. If this returns
                         # False then we've hit our max retry threshold. Die.
-                        key = self.region_client.host + ':' + self.region_client.port
+                        key = self.region_client.host + b":" + self.region_client.port
                         if not _dynamic_sleep(self, key):
                             raise self
             finally:
@@ -110,8 +112,8 @@ class RegionServerStoppedException(RegionServerException):
 class MasterServerException(PyBaseException):
 
     def __init__(self, host, port):
-        self.host = host
-        self.port = port
+        self.host = host.encode('utf8') if isinstance(host, str) else host
+        self.port = port.encode('utf8') if isinstance(port, str) else port
 
     def _handle_exception(self, main_client, **kwargs):
         # Let one greenlet through. Others block and eventually return False.
@@ -132,10 +134,6 @@ class MasterServerException(PyBaseException):
 
 # Master gave us funky data. Unrecoverable.
 class MasterMalformedResponseException(MasterServerException):
-    def __init__(self, host, port):
-        self.host = host
-        self.port = port
-
     def _handle_exception(self, main_client, **kwargs):
         raise self.__class__(str(self))
 
