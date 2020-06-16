@@ -17,6 +17,7 @@ from __future__ import absolute_import, print_function, unicode_literals
 
 import logging
 import socket
+from contextlib import contextmanager
 from io import BytesIO
 from struct import pack, unpack
 from threading import Condition, Lock
@@ -40,6 +41,14 @@ response_types = {
     b"Mutate": MutateResponse,
     b"Scan": ScanResponse
 }
+
+
+@contextmanager
+def acquire_timeout(lock, timeout):
+    result = lock.acquire(timeout=timeout)
+    yield result
+    if result:
+        lock.release()
 
 
 # This Client is created once per RegionServer. Handles all communication
@@ -102,7 +111,7 @@ class Client(object):
     #   4. A varint representing the length of the serialized RPC.
     #   5. The serialized RPC.
     #
-    def _send_request(self, rq):
+    def _send_request(self, rq, lock_timeout=30):
         with self.call_lock:
             my_id = self.call_id
             self.call_id += 1
@@ -125,10 +134,16 @@ class Client(object):
 
         pool_id = my_id % self.pool_size
         try:
-            with self.write_lock_pool[pool_id]:
-                logger.debug('Sending %s RPC to %s:%s on pool port %s',
-                             rq.type, self.host, self.port, pool_id)
-                self.sock_pool[pool_id].send(to_send)
+            # todo: quick hack to patch a deadlock happening here. Needs revisiting.
+            with acquire_timeout(self.write_lock_pool[pool_id], lock_timeout) as acquired:
+                if acquired:
+                    logger.debug('Sending %s RPC to %s:%s on pool port %s',
+                                 rq.type, self.host, self.port, pool_id)
+                    self.sock_pool[pool_id].send(to_send)
+                else:
+                    logger.warning('Lock timeout %s RPC to %s:%s on pool port %s' %
+                                   (rq.type, self.host, self.port, pool_id))
+                    raise RegionServerException(region_client=self)
         except socket.error:
             # RegionServer dead?
             raise RegionServerException(region_client=self)
