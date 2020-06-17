@@ -111,10 +111,14 @@ class Client(object):
     #   4. A varint representing the length of the serialized RPC.
     #   5. The serialized RPC.
     #
-    def _send_request(self, rq, lock_timeout=30):
-        with self.call_lock:
-            my_id = self.call_id
-            self.call_id += 1
+    def _send_request(self, rq, lock_timeout=10):
+        with acquire_timeout(self.call_lock, lock_timeout) as acquired:
+            if acquired:
+                my_id = self.call_id
+                self.call_id += 1
+            else:
+                logger.warning('Lock timeout %s RPC to %s:%s' % (rq.type, self.host, self.port))
+                raise RegionServerException(region_client=self)
         serialized_rpc = rq.pb.SerializeToString()
         header = RequestHeader()
         header.call_id = my_id
@@ -141,7 +145,7 @@ class Client(object):
                                  rq.type, self.host, self.port, pool_id)
                     self.sock_pool[pool_id].send(to_send)
                 else:
-                    logger.warning('Lock timeout %s RPC to %s:%s on pool port %s' %
+                    logger.warning('Lock timeout sending %s RPC to %s:%s on pool port %s' %
                                    (rq.type, self.host, self.port, pool_id))
                     raise RegionServerException(region_client=self)
         except socket.error:
@@ -161,7 +165,7 @@ class Client(object):
     #   4. A varint representing the length of the serialized ResponseMessage.
     #   5. The ResponseMessage.
     #
-    def _receive_rpc(self, call_id, rq, data=None):
+    def _receive_rpc(self, call_id, rq, data=None, lock_timeout=10):
         # If the field data is populated that means we should process from that
         # instead of the socket.
         full_data = data
@@ -169,18 +173,23 @@ class Client(object):
             pool_id = call_id % self.pool_size
             # Total message length is going to be the first four bytes
             # (little-endian uint32)
-            with self.read_lock_pool[pool_id]:
-                try:
-                    msg_length = self._recv_n(self.sock_pool[pool_id], 4)
-                    if msg_length is None:
-                        raise
-                    msg_length = unpack(">I", msg_length)[0]
-                    # The message is then going to be however many bytes the first four
-                    # bytes specified. We don't want to overread or underread as that'll
-                    # cause havoc.
-                    full_data = self._recv_n(
-                        self.sock_pool[pool_id], msg_length)
-                except socket.error:
+            with acquire_timeout(self.read_lock_pool[pool_id], lock_timeout) as acquired:
+                if acquired:
+                    try:
+                        msg_length = self._recv_n(self.sock_pool[pool_id], 4)
+                        if msg_length is None:
+                            raise
+                        msg_length = unpack(">I", msg_length)[0]
+                        # The message is then going to be however many bytes the first four
+                        # bytes specified. We don't want to overread or underread as that'll
+                        # cause havoc.
+                        full_data = self._recv_n(
+                            self.sock_pool[pool_id], msg_length)
+                    except socket.error:
+                        raise RegionServerException(region_client=self)
+                else:
+                    logger.warning('Lock timeout receive %s RPC to %s:%s on pool port %s' %
+                                   (rq.type, self.host, self.port, pool_id))
                     raise RegionServerException(region_client=self)
         # Pass in the full data as well as your current position to the
         # decoder. It'll then return two variables:
@@ -227,18 +236,22 @@ class Client(object):
     #               4.5  Call wait() on the conditional and get comfy.
     #       5. Pop your data out
     #       6. Release the lock
-    def _bad_call_id(self, my_id, my_request, msg_id, data):
-        with self.missed_rpcs_lock:
-            logger.debug(
-                "Received invalid RPC ID. Got: %s, Expected: %s.", msg_id, my_id)
-            self.missed_rpcs[msg_id] = data
-            self.missed_rpcs_condition.notifyAll()
-            while my_id not in self.missed_rpcs:
-                if self.shutting_down:
-                    raise RegionServerException(region_client=self)
-                self.missed_rpcs_condition.wait()
-            new_data = self.missed_rpcs.pop(my_id)
-            logger.debug("Another thread found my RPC! RPC ID: %s", my_id)
+    def _bad_call_id(self, my_id, my_request, msg_id, data, lock_timeout=10):
+        with acquire_timeout(self.missed_rpcs_lock, lock_timeout) as acquired:
+            if acquired:
+                logger.debug(
+                    "Received invalid RPC ID. Got: %s, Expected: %s.", msg_id, my_id)
+                self.missed_rpcs[msg_id] = data
+                self.missed_rpcs_condition.notifyAll()
+                while my_id not in self.missed_rpcs:
+                    if self.shutting_down:
+                        raise RegionServerException(region_client=self)
+                    self.missed_rpcs_condition.wait()
+                new_data = self.missed_rpcs.pop(my_id)
+                logger.debug("Another thread found my RPC! RPC ID: %s", my_id)
+            else:
+                logger.warning('Lock timeout bad_call to %s:%s' % (self.host, self.port))
+                raise RegionServerException(region_client=self)
         return self._receive_rpc(my_id, my_request, data=new_data)
 
     # Receives exactly n bytes from the socket. Will block until n bytes are
