@@ -246,7 +246,7 @@ class Client(object):
                 while my_id not in self.missed_rpcs:
                     if self.shutting_down:
                         raise RegionServerException(region_client=self)
-                    self.missed_rpcs_condition.wait()
+                    self.missed_rpcs_condition.wait(lock_timeout)
                 new_data = self.missed_rpcs.pop(my_id)
                 logger.debug("Another thread found my RPC! RPC ID: %s", my_id)
             else:
