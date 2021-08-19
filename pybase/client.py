@@ -339,6 +339,7 @@ class MainClient(object):
         # table doesn't exist!
         if len(cells) == 0:
             raise NoSuchTableException("Table does not exist.")
+        server_loc = None
         # We get ~4 cells back each holding different information. We only care
         # about two of them.
         for cell in cells:
@@ -354,7 +355,7 @@ class MainClient(object):
             else:
                 continue
         # Do we have an existing client for this region server already?
-        if server_loc in self.reverse_client_cache:
+        if server_loc and server_loc in self.reverse_client_cache:
             # If so, grab it!
             new_region.region_client = self.reverse_client_cache[server_loc]
         else:
