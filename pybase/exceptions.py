@@ -65,10 +65,11 @@ class ZookeeperResponseException(ZookeeperException):
 # Means an RS is dead or unreachable.
 class RegionServerException(PyBaseException):
 
-    def __init__(self, host=None, port=None, region_client=None):
+    def __init__(self, host=None, port=None, region_client=None, secondary=False):
         self.host = host.encode('utf8') if isinstance(host, str) else host
         self.port = port.encode('utf8') if isinstance(port, str) else port
         self.region_client = region_client
+        self.secondary = secondary
 
     def _handle_exception(self, main_client, **kwargs):
         # region_client not set? Then host/port must have been. Fetch the
@@ -77,6 +78,11 @@ class RegionServerException(PyBaseException):
             concat = self.host + b":" + self.port
             self.region_client = main_client.reverse_client_cache.get(
                 concat, None)
+
+        # we don't care about secondaries, move on 
+        if (self.region_client and self.region_client.secondary) or self.secondary:
+            _let_all_through(self, self.region_client)
+
         # Let one greenlet through per region_client (returns True otherwise
         # blocks and eventually returns False)
         if _let_one_through(self, self.region_client):
@@ -111,11 +117,16 @@ class RegionServerStoppedException(RegionServerException):
 # All Master exceptions inherit from me
 class MasterServerException(PyBaseException):
 
-    def __init__(self, host, port):
+    def __init__(self, host, port, secondary=False):
         self.host = host.encode('utf8') if isinstance(host, str) else host
         self.port = port.encode('utf8') if isinstance(port, str) else port
+        self.secondary = secondary
 
     def _handle_exception(self, main_client, **kwargs):
+        # we don't care about secondaries, move on
+        if self.secondary:
+            _let_all_through(self, None)
+
         # Let one greenlet through. Others block and eventually return False.
         if _let_one_through(self, None):
             try:
@@ -141,9 +152,17 @@ class MasterMalformedResponseException(MasterServerException):
 # All region exceptions inherit from me.
 class RegionException(PyBaseException):
 
+    def __init__(self, region_client=None):
+        self.region_client = region_client
+
     def _handle_exception(self, main_client, **kwargs):
         if "dest_region" in kwargs:
             rg_n = kwargs["dest_region"].region_name
+
+            # we don't care about secondaries, move on
+            if self.region_client and self.region_client.secondary:
+                _let_all_through(self, rg_n)
+
             if _let_one_through(self, rg_n):
                 try:
                     main_client._purge_region(kwargs["dest_region"])
@@ -168,6 +187,10 @@ class NotServingRegionException(RegionException):
 class RegionOpeningException(RegionException):
 
     def _handle_exception(self, main_client, **kwargs):
+        # we don't care about secondaries, move on
+        if self.region_client and self.region_client.secondary:
+            raise self
+
         if "dest_region" in kwargs:
             rg_n = kwargs["dest_region"].region_name
             # There's nothing to handle here. We just need to give the region

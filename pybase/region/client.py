@@ -61,7 +61,7 @@ class Client(object):
     #   - call_id: A monotonically increasing int used as a sequence number for rpcs. This way
     #   we can match incoming responses with the rpc that made the request.
 
-    def __init__(self, host, port):
+    def __init__(self, host, port, secondary):
         self.host = host
         self.port = port
         self.pool_size = 0
@@ -99,6 +99,10 @@ class Client(object):
         # region, we can close them all at the same time (saving us a significant
         # amount of meta lookups).
         self.regions = []
+
+        # Capture if this client is being used for secondary operations
+        # We don't really care if it fails, best effort only.
+        self.secondary = secondary
 
     # Sends an RPC over the wire then calls _receive_rpc and returns the
     # response RPC.
@@ -211,14 +215,14 @@ class Client(object):
                      "java.io.IOException"}:
                 raise NoSuchColumnFamilyException()
             elif exception_class == 'org.apache.hadoop.hbase.exceptions.RegionMovedException':
-                raise RegionMovedException()
+                raise RegionMovedException(region_client=self)
             elif exception_class == 'org.apache.hadoop.hbase.NotServingRegionException':
-                raise NotServingRegionException()
+                raise NotServingRegionException(region_client=self)
             elif exception_class == \
                     'org.apache.hadoop.hbase.regionserver.RegionServerStoppedException':
                 raise RegionServerException(region_client=self)
             elif exception_class == 'org.apache.hadoop.hbase.exceptions.RegionOpeningException':
-                raise RegionOpeningException()
+                raise RegionOpeningException(region_client=self)
             else:
                 raise PyBaseException(
                     exception_class + ". Remote traceback:\n%s" % header.exception.stack_trace)
@@ -282,8 +286,8 @@ class Client(object):
 
 # Creates a new RegionServer client. Creates the socket, initializes the
 # connection and returns an instance of Client.
-def NewClient(host, port, pool_size):
-    c = Client(host, port)
+def NewClient(host, port, pool_size, secondary=False):
+    c = Client(host, port, secondary)
     try:
         c.pool_size = pool_size
         for x in range(pool_size):
