@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 
 class MainClient(object):
 
-    def __init__(self, zkquorum, pool_size):
+    def __init__(self, zkquorum, pool_size, secondary=False):
         # Location of the ZooKeeper quorum (csv)
         self.zkquorum = zkquorum
         # Connection pool size per region server (and master!)
@@ -53,6 +53,10 @@ class MainClient(object):
         # Mutex used so only one thread can request meta information from
         # the master at a time.
         self._master_lookup_lock = Lock()
+        # Capture if this client is being used for secondary operations
+        # We don't really care if it fails, best effort only.
+        self.secondary = secondary
+
 
     """
         HERE LAY CACHE OPERATIONS
@@ -326,9 +330,9 @@ class MainClient(object):
         except (AttributeError, RegionServerException, RegionException):
             if self.master_client is None:
                 # I don't know why this can happen but it does.
-                raise MasterServerException(None, None)
+                raise MasterServerException(None, None, secondary=self.secondary)
             raise MasterServerException(
-                self.master_client.host, self.master_client.port)
+                self.master_client.host, self.master_client.port, secondary=self.secondary)
         # Master gave us a response. We need to run and parse the response,
         # then do all necessary work for entering it into our structures.
         return self._create_new_region(response, table)
@@ -360,11 +364,11 @@ class MainClient(object):
             new_region.region_client = self.reverse_client_cache[server_loc]
         else:
             # Otherwise we need to create a new region client instance.
-            new_client = region.NewClient(host, port, self.pool_size)
+            new_client = region.NewClient(host, port, self.pool_size, secondary=self.secondary)
             if new_client is None:
                 # Welp. We can't connect to the server that the Master
                 # supplied. Raise an exception.
-                raise RegionServerException(host=host, port=port)
+                raise RegionServerException(host=host, port=port, secondary=self.secondary)
             logger.info("Created new Client for RegionServer %s", server_loc)
             # Add it to the host,port -> instance of region client map.
             self.reverse_client_cache[server_loc] = new_client
@@ -385,11 +389,11 @@ class MainClient(object):
         try:
             # Try creating a new client instance and setting it as the new
             # master_client.
-            self.master_client = region.NewClient(ip, port, self.pool_size)
+            self.master_client = region.NewClient(ip, port, self.pool_size, secondary=self.secondary)
         except RegionServerException:
             # We can't connect to the address that ZK supplied. Raise an
             # exception.
-            raise MasterServerException(ip, port)
+            raise MasterServerException(ip, port, secondary=self.secondary)
 
     """
         HERE LAY THE MISCELLANEOUS
