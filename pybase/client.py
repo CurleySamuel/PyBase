@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 
 class MainClient(object):
 
-    def __init__(self, zkquorum, pool_size, secondary=False):
+    def __init__(self, zkquorum, pool_size, secondary):
         # Location of the ZooKeeper quorum (csv)
         self.zkquorum = zkquorum
         # Connection pool size per region server (and master!)
