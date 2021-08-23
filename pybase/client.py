@@ -495,9 +495,9 @@ class Result(object):
 # location of ZooKeeper this function will ask ZK for the location of the
 # meta table and create the region client responsible for future meta
 # lookups (masterclient). Returns an instance of MainClient
-def NewClient(zkquorum, socket_pool_size=1):
+def NewClient(zkquorum, socket_pool_size=1, secondary=False):
     # Create the main client.
-    a = MainClient(zkquorum, socket_pool_size)
+    a = MainClient(zkquorum, socket_pool_size, secondary)
     # Create the master client.
     a._recreate_master_client()
     return a
