@@ -46,9 +46,11 @@ response_types = {
 @contextmanager
 def acquire_timeout(lock, timeout):
     result = lock.acquire(timeout=timeout)
-    yield result
-    if result:
-        lock.release()
+    try:
+        yield result
+    finally:
+        if result:
+            lock.release()
 
 
 # This Client is created once per RegionServer. Handles all communication
