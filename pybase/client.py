@@ -58,8 +58,12 @@ class MainClient(object):
         self.secondary = secondary
 
         self.zk_client = zk.connect(zkquorum)
-        ip, port = zk.get_master_info(self.zk_client, self.update_master_client)
-        self.update_master_client(ip, port)
+        self.update_master_client(*zk.get_master_info(self.zk_client))
+
+        # register a callback handler when master znode data changes
+        @self.zk_client.DataWatch(zk.master_znode)
+        def _update_master_info(data, stat):
+            self.update_master_client(*zk.parse_master_info(data))
 
     """
         HERE LAY CACHE OPERATIONS

@@ -30,6 +30,7 @@ from ..pb.ZooKeeper_pb2 import MetaRegionServer
 logger = logging.getLogger(__name__)
 
 znode = "/hbase"
+master_znode = znode + "/meta-region-server"
 
 
 def connect(zkquorum, establish_connection_timeout=5):
@@ -43,7 +44,7 @@ def connect(zkquorum, establish_connection_timeout=5):
     return zk
 
 
-def _parse_master_info(resp):
+def parse_master_info(resp):
     if len(resp) == 0:
         # Empty response is bad.
         raise ZookeeperResponseException("ZooKeeper returned an empty response")
@@ -70,14 +71,10 @@ def _parse_master_info(resp):
     return meta.server.host_name, meta.server.port
 
 
-def get_master_info(zk, watch_fn, missing_znode_retries=5):
-    def _wrapped_watch(resp, stat):
-        watch_fn(*_parse_master_info(resp))
-
+def get_master_info(zk, missing_znode_retries=5):
     try:
-        resp, _ = zk.get(znode + "/meta-region-server", watch=_wrapped_watch)
-
-        return _parse_master_info(resp)
+        resp, _ = zk.get(master_znode)
+        return parse_master_info(resp)
     except NoNodeError:
         if missing_znode_retries == 0:
             raise ZookeeperZNodeException(
