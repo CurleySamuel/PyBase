@@ -18,14 +18,14 @@ from __future__ import absolute_import, print_function, unicode_literals
 import logging
 from builtins import str
 from itertools import chain
-from threading import Lock
+from threading import Condition, Lock
 
 import pybase.region.client as region
 import pybase.zk.client as zk
 from intervaltree import IntervalTree
 
 from .exceptions import (MasterServerException, NoSuchTableException,
-                         PyBaseException, RegionException, RegionServerException)
+                         PyBaseException, RegionException, RegionServerException, ZookeeperException)
 from .filters import _to_filter
 from .region.region import region_from_cell
 from .request import request
@@ -57,6 +57,19 @@ class MainClient(object):
         # We don't really care if it fails, best effort only.
         self.secondary = secondary
 
+        self.zk_client = zk.connect(zkquorum)
+
+        # register a callback handler when master znode data changes
+        @self.zk_client.DataWatch(zk.master_znode)
+        def _update_master_info(data, stat):
+            if data:
+                with self._master_lookup_lock:
+                    self.update_master_client(*zk.parse_master_info(data))
+
+        wait_for_master = Condition()
+        wait_for_master.acquire()
+        if wait_for_master.wait_for(lambda: self.master_client is not None, 10.0):
+           raise ZookeeperException("Timed out waiting for master server watch to fire")
 
     """
         HERE LAY CACHE OPERATIONS
@@ -380,19 +393,15 @@ class MainClient(object):
         logger.info("Successfully discovered new region %s", new_region)
         return new_region
 
-    def _recreate_master_client(self):
-        if self.master_client is not None:
-            # yep, still no idea why self.master_client can be set to None.
+    def update_master_client(self, ip, port):
+        if self.master_client:
             self.master_client.close()
-        # Ask ZooKeeper for the location of the Master.
-        ip, port = zk.LocateMaster(self.zkquorum)
+
         try:
-            # Try creating a new client instance and setting it as the new
-            # master_client.
+            # Try creating a new client instance and setting it as the new master_client.
             self.master_client = region.NewClient(ip, port, self.pool_size, secondary=self.secondary)
+            logger.info("Updated master client to %s:%s", ip, port)
         except RegionServerException:
-            # We can't connect to the address that ZK supplied. Raise an
-            # exception.
             raise MasterServerException(ip, port, secondary=self.secondary)
 
     """
@@ -498,6 +507,4 @@ class Result(object):
 def NewClient(zkquorum, socket_pool_size=1, secondary=False):
     # Create the main client.
     a = MainClient(zkquorum, socket_pool_size, secondary)
-    # Create the master client.
-    a._recreate_master_client()
     return a
