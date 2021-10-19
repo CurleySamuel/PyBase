@@ -69,17 +69,3 @@ def parse_master_info(resp):
     meta.ParseFromString(rsp)
     logger.info('Discovered Master at %s:%s', meta.server.host_name, meta.server.port)
     return meta.server.host_name, meta.server.port
-
-
-def get_master_info(zk, missing_znode_retries=5):
-    try:
-        resp, _ = zk.get(master_znode)
-        return parse_master_info(resp)
-    except NoNodeError:
-        if missing_znode_retries == 0:
-            raise ZookeeperZNodeException(
-                "ZooKeeper does not contain meta-region-server node.")
-        logger.warning("ZooKeeper does not contain meta-region-server node. Retrying in 2 seconds. "
-                       "(%s retries remaining)", missing_znode_retries)
-        sleep(2.0)
-        return get_master_info(zk, missing_znode_retries - 1)
