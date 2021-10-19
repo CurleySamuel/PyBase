@@ -67,7 +67,8 @@ def parse_master_info(resp):
     rsp = resp[meta_length + 9:]
     meta = MetaRegionServer()
     meta.ParseFromString(rsp)
-    logger.info('Discovered Master at %s:%s', meta.server.host_name, meta.server.port)
+    print('Discovered Master at %s:%s' % (meta.server.host_name, meta.server.port))
+    #logger.info('Discovered Master at %s:%s', meta.server.host_name, meta.server.port)
     return meta.server.host_name, meta.server.port
 
 

@@ -18,14 +18,14 @@ from __future__ import absolute_import, print_function, unicode_literals
 import logging
 from builtins import str
 from itertools import chain
-from threading import Lock
+from threading import Condition, Lock
 
 import pybase.region.client as region
 import pybase.zk.client as zk
 from intervaltree import IntervalTree
 
 from .exceptions import (MasterServerException, NoSuchTableException,
-                         PyBaseException, RegionException, RegionServerException)
+                         PyBaseException, RegionException, RegionServerException, ZookeeperException)
 from .filters import _to_filter
 from .region.region import region_from_cell
 from .request import request
@@ -58,12 +58,17 @@ class MainClient(object):
         self.secondary = secondary
 
         self.zk_client = zk.connect(zkquorum)
-        self.update_master_client(*zk.get_master_info(self.zk_client))
 
         # register a callback handler when master znode data changes
         @self.zk_client.DataWatch(zk.master_znode)
         def _update_master_info(data, stat):
-            self.update_master_client(*zk.parse_master_info(data))
+            if data:
+                self.update_master_client(*zk.parse_master_info(data))
+
+        wait_for_master = Condition()
+        wait_for_master.acquire()
+        if wait_for_master.wait_for(lambda: self.master_client is not None, 10.0):
+           raise ZookeeperException("Timed out waiting for master server watch to fire")
 
     """
         HERE LAY CACHE OPERATIONS
