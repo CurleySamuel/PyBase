@@ -59,16 +59,29 @@ class MainClient(object):
 
         self.zk_client = zk.connect(zkquorum)
 
+        wait_for_master = Condition() 
+        wait_for_master.acquire()
+
         # register a callback handler when master znode data changes
         @self.zk_client.DataWatch(zk.master_znode)
         def _update_master_info(data, stat):
+            initial = self.master_client is None
             if data:
                 with self._master_lookup_lock:
                     self.update_master_client(*zk.parse_master_info(data))
 
-        wait_for_master = Condition()
-        wait_for_master.acquire()
-        if wait_for_master.wait_for(lambda: self.master_client is not None, 10.0):
+                    if initial:
+                        wait_for_master.acquire()
+                        wait_for_master.notify_all()
+                        wait_for_master.release()
+
+        wait_time = 0.0
+        # wait up to 10s
+        while self.master_client is None and wait_time < 10.0:
+            wait_for_master.wait(1.0)
+            wait_time += 1.0
+
+        if self.master_client is None:
            raise ZookeeperException("Timed out waiting for master server watch to fire")
 
     """
@@ -505,6 +518,4 @@ class Result(object):
 # meta table and create the region client responsible for future meta
 # lookups (masterclient). Returns an instance of MainClient
 def NewClient(zkquorum, socket_pool_size=1, secondary=False):
-    # Create the main client.
-    a = MainClient(zkquorum, socket_pool_size, secondary)
-    return a
+    return MainClient(zkquorum, socket_pool_size, secondary)
