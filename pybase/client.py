@@ -63,7 +63,8 @@ class MainClient(object):
         @self.zk_client.DataWatch(zk.master_znode)
         def _update_master_info(data, stat):
             if data:
-                self.update_master_client(*zk.parse_master_info(data))
+                with self._master_lookup_lock:
+                    self.update_master_client(*zk.parse_master_info(data))
 
         wait_for_master = Condition()
         wait_for_master.acquire()
