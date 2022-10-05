@@ -79,7 +79,7 @@ class RegionServerException(PyBaseException):
             self.region_client = main_client.reverse_client_cache.get(
                 concat, None)
 
-        # we don't care about secondaries, move on 
+        # we don't care about secondaries, move on
         if (self.region_client and self.region_client.secondary) or self.secondary:
             _let_all_through(self, self.region_client)
 
@@ -90,17 +90,19 @@ class RegionServerException(PyBaseException):
                 if self.region_client is not None:
                     # We need to make sure that a different thread hasn't already
                     # reestablished to this region.
-                    loc = self.region_client.host + b":" + self.region_client.port
+                    loc = self.region_client.host + ":" + self.region_client.port
                     if loc in main_client.reverse_client_cache:
                         # We're the first in and it's our job to kill the client.
                         # Purge it.
-                        logger.warn("Region server %s:%s refusing connections. Purging cache, "
-                                    "sleeping, retrying.",
-                                    self.region_client.host, self.region_client.port)
+                        logger.warning(
+                            "Region server %s:%s refusing connections. "
+                            "Purging cache, sleeping, retrying.",
+                            self.region_client.host, self.region_client.port
+                        )
                         main_client._purge_client(self.region_client)
                         # Sleep for an arbitrary amount of time. If this returns
                         # False then we've hit our max retry threshold. Die.
-                        key = self.region_client.host + b":" + self.region_client.port
+                        key = self.region_client.host + ":" + self.region_client.port
                         if not _dynamic_sleep(self, key):
                             raise self
             finally:
@@ -134,8 +136,10 @@ class MasterServerException(PyBaseException):
                 if main_client.master_client is None or \
                         (self.host == main_client.master_client.host and
                          self.port == main_client.master_client.port):
-                    logger.warn("Encountered an exception with the Master server. "
-                                "Sleeping then reestablishing.")
+                    logger.warning(
+                        "Encountered an exception with the Master server. "
+                        "Sleeping then reestablishing."
+                    )
                     if not _dynamic_sleep(self, None):
                         raise self
                     main_client._recreate_master_client()
@@ -297,6 +301,7 @@ def _let_all_through(exception, data):
 def sleep_formula(x):
     # [0.0, 0.44, 1.77, 4.0, 7.11, 11.11, 16.0, 21.77, 28.44, 36.0]
     return (x / 1.5)**2
+
 
 _exception_count = defaultdict(lambda: (0, time()))
 _max_retries = 7
