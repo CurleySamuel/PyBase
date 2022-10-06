@@ -24,8 +24,14 @@ import pybase.region.client as region
 import pybase.zk.client as zk
 from intervaltree import IntervalTree
 
-from .exceptions import (MasterServerException, NoSuchTableException,
-                         PyBaseException, RegionException, RegionServerException, ZookeeperException)
+from .exceptions import (
+    MasterServerException,
+    NoSuchTableException,
+    PyBaseException,
+    RegionException,
+    RegionServerException,
+    ZookeeperException
+)
 from .filters import _to_filter
 from .region.region import region_from_cell
 from .request import request
@@ -59,7 +65,7 @@ class MainClient(object):
 
         self.zk_client = zk.connect(zkquorum)
 
-        wait_for_master = Condition() 
+        wait_for_master = Condition()
         wait_for_master.acquire()
 
         # register a callback handler when master znode data changes
@@ -82,7 +88,7 @@ class MainClient(object):
             wait_time += 1.0
 
         if self.master_client is None:
-           raise ZookeeperException("Timed out waiting for master server watch to fire")
+            raise ZookeeperException("Timed out waiting for master server watch to fire")
 
     """
         HERE LAY CACHE OPERATIONS
@@ -339,8 +345,7 @@ class MainClient(object):
                 dest_region = self._get_from_region_cache(table, key)
                 if dest_region is None:
                     # Nope, still not in the cache.
-                    logger.debug(
-                        'Region cache miss! Table: %s, Key: %s', table, key)
+                    logger.debug('Region cache miss! Table: %s, Key: %s', table, key)
                     # Ask master for region information.
                     dest_region = self._discover_region(table, key)
         return dest_region
@@ -382,7 +387,6 @@ class MainClient(object):
                 # hosted on.
                 server_loc = cell.value
                 host, port = cell.value.split(b':')
-                host = host.decode("utf-8")
             else:
                 continue
         # Do we have an existing client for this region server already?
@@ -413,7 +417,8 @@ class MainClient(object):
 
         try:
             # Try creating a new client instance and setting it as the new master_client.
-            self.master_client = region.NewClient(ip, port, self.pool_size, secondary=self.secondary)
+            self.master_client = region.NewClient(
+                ip, port, self.pool_size, secondary=self.secondary)
             logger.info("Updated master client to %s:%s", ip, port)
         except RegionServerException:
             raise MasterServerException(ip, port, secondary=self.secondary)
