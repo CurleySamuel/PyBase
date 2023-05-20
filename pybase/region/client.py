@@ -162,14 +162,14 @@ class Client(object):
         sp = thread_name.split("_") # i.e. splitting "ThreadPoolExecutor-1_0"
         pool_id = int(sp[1]) # thread number is now responsible for only using its matching socket
 
-        client.sock_pool[pool_id].send(to_send)
-
         # If the field data is populated that means we should process from that
         # instead of the socket.
         full_data = None
         # Total message length is going to be the first four bytes
         # (little-endian uint32)
         try:
+            client.sock_pool[pool_id].send(to_send)
+
             msg_length = Client._recv_n(self.sock_pool[pool_id], 4)
             if msg_length is None:
                 raise
