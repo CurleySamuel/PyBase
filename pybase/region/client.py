@@ -142,21 +142,7 @@ class Client(object):
         to_send = pack(">IB", total_length - 4, len(serialized_header))
         to_send += serialized_header + rpc_length_bytes + serialized_rpc
 
-        try:
-            # todo: quick hack to patch a deadlock happening here. Needs revisiting.
-            with acquire_timeout(self.write_lock_pool[pool_id], lock_timeout) as acquired:
-                if acquired:
-                    logger.debug('Sending %s RPC to %s:%s on pool port %s',
-                                 rq.type, self.host, self.port, pool_id)
-                    self.sock_pool[pool_id].send(to_send)
-                else:
-                    logger.warning('Lock timeout sending %s RPC to %s:%s on pool port %s',
-                                   rq.type, self.host, self.port, pool_id)
-                    raise RegionServerException(region_client=self)
-        except socket.error:
-            # RegionServer dead?
-            raise RegionServerException(region_client=self)
-        # Message is sent! Now go listen for the results.
+        # send and receive the request
         future = self.thread_pool.submit(Client.send_and_receive_rpc, [self, my_id, rq, to_send])
         return future.result()
 
