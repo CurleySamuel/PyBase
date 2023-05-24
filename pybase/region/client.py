@@ -143,8 +143,8 @@ class Client(object):
         to_send += serialized_header + rpc_length_bytes + serialized_rpc
 
         # send and receive the request
-        future = self.thread_pool.submit(self.send_and_receive_rpc, rq, to_send)
-        return future.result()
+        future = self.thread_pool.submit(self.send_and_receive_rpc, my_id, rq, to_send)
+        return future.result(timeout=60)
 
     # Sending an RPC, listens for the response and builds the correct pbResponse object.
     #
@@ -156,20 +156,26 @@ class Client(object):
     #   4. A varint representing the length of the serialized ResponseMessage.
     #   5. The ResponseMessage.
     #
-    # @staticmethod
-    def send_and_receive_rpc(self, rq, to_send):
+    def send_and_receive_rpc(self, call_id, rq, to_send):
         thread_name = current_thread().name
         sp = thread_name.split("_") # i.e. splitting "ThreadPoolExecutor-1_0"
         pool_id = int(sp[1]) # thread number is now responsible for only using its matching socket
+        try:
+            self.sock_pool[pool_id].send(to_send)
+        except socket.error:
+            raise RegionServerException(region_client=self)
+
+        return self.receive_rpc(pool_id=pool_id, call_id=call_id, rq=rq)
+
+
+    def receive_rpc(self, pool_id, call_id, rq, data=None):
 
         # If the field data is populated that means we should process from that
         # instead of the socket.
-        full_data = None
+        full_data = data
         # Total message length is going to be the first four bytes
         # (little-endian uint32)
         try:
-            self.sock_pool[pool_id].send(to_send)
-
             msg_length = Client._recv_n(self.sock_pool[pool_id], 4)
             if msg_length is None:
                 raise
@@ -188,7 +194,11 @@ class Client(object):
         header = ResponseHeader()
         header.ParseFromString(full_data[pos: pos + next_pos])
         pos += next_pos
-        if header.exception.exception_class_name != '':
+        if header.call_id != call_id:
+            # Receive an RPC with incorrect call_id, so call receive again to receive the next
+            # data on the socket.  Most likely, this means that
+            return self.receive_rpc(pool_id, call_id, rq)
+        elif header.exception.exception_class_name != '':
             # If we're in here it means a remote exception has happened.
             exception_class = header.exception.exception_class_name
             if exception_class in \
@@ -212,6 +222,7 @@ class Client(object):
         rpc.ParseFromString(full_data[pos: pos + next_pos])
         # The rpc is fully built!
         return rpc
+
 
     # Receives exactly n bytes from the socket. Will block until n bytes are
     # received. If a socket is closed (RegionServer died) then raise an
