@@ -143,7 +143,7 @@ class Client(object):
         to_send += serialized_header + rpc_length_bytes + serialized_rpc
 
         # send and receive the request
-        future = self.thread_pool.submit(Client.send_and_receive_rpc, [self, my_id, rq, to_send])
+        future = self.thread_pool.submit(self.send_and_receive_rpc, rq, to_send)
         return future.result()
 
     # Sending an RPC, listens for the response and builds the correct pbResponse object.
@@ -156,8 +156,8 @@ class Client(object):
     #   4. A varint representing the length of the serialized ResponseMessage.
     #   5. The ResponseMessage.
     #
-    @staticmethod
-    def send_and_receive_rpc(client, call_id, rq, to_send):
+    # @staticmethod
+    def send_and_receive_rpc(self, rq, to_send):
         thread_name = current_thread().name
         sp = thread_name.split("_") # i.e. splitting "ThreadPoolExecutor-1_0"
         pool_id = int(sp[1]) # thread number is now responsible for only using its matching socket
@@ -168,7 +168,7 @@ class Client(object):
         # Total message length is going to be the first four bytes
         # (little-endian uint32)
         try:
-            client.sock_pool[pool_id].send(to_send)
+            self.sock_pool[pool_id].send(to_send)
 
             msg_length = Client._recv_n(self.sock_pool[pool_id], 4)
             if msg_length is None:
