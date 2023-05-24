@@ -64,12 +64,13 @@ class Client(object):
     #   - call_id: A monotonically increasing int used as a sequence number for rpcs. This way
     #   we can match incoming responses with the rpc that made the request.
 
-    def __init__(self, host, port, secondary):
+    def __init__(self, host, port, secondary, call_timeout=60):
         self.host = host.decode('utf8') if isinstance(host, bytes) else host
         self.port = port.decode('utf8') if isinstance(port, bytes) else port
         self.pool_size = 0
 
         self.thread_pool = None
+        self.thread_pool_timeout = call_timeout
         self.sock_pool = []
 
         # Why yes, we do have a mutex protecting a single variable.
@@ -127,7 +128,7 @@ class Client(object):
 
         # send and receive the request
         future = self.thread_pool.submit(self.send_and_receive_rpc, my_id, rq, to_send)
-        return future.result(timeout=60)
+        return future.result(timeout=self.thread_pool_timeout)
 
     # Sending an RPC, listens for the response and builds the correct pbResponse object.
     #
@@ -230,8 +231,8 @@ class Client(object):
 
 # Creates a new RegionServer client. Creates the socket, initializes the
 # connection and returns an instance of Client.
-def NewClient(host, port, pool_size, secondary=False):
-    c = Client(host, port, secondary)
+def NewClient(host, port, pool_size, secondary=False, call_timeout=60):
+    c = Client(host, port, secondary, call_timeout)
     try:
         c.pool_size = pool_size
         c.thread_pool = ThreadPoolExecutor(pool_size)
