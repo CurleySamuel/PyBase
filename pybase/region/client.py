@@ -75,24 +75,7 @@ class Client(object):
         # Why yes, we do have a mutex protecting a single variable.
         self.call_lock = Lock()
         self.call_id = 0
-        # This dictionary and associated sync primitives are for when _receive_rpc
-        # receives an RPC that isn't theirs. If a thread gets one that isn't
-        # theirs it means there's another thread who also just sent an RPC. The
-        # other thread will also get the wrong call_id. So how do we make them
-        # switch RPCs?
-        #
-        # Receive an RPC with incorrect call_id?
-        #       1. Acquire lock
-        #       2. Place raw data into missed_rpcs with key call_id
-        #       3. Notify all other threads to wake up (nothing will happen until you release the
-        #          lock)
-        #       4. WHILE: Your call_id is not in the dictionary
-        #               4.5  Call wait() on the conditional and get comfy.
-        #       5. Pop your data out
-        #       6. Release the lock
-        self.missed_rpcs = {}
-        self.missed_rpcs_lock = Lock()
-        self.missed_rpcs_condition = Condition(self.missed_rpcs_lock)
+
         # Set to true when .close is called - this allows threads/greenlets
         # stuck in _bad_call_id to escape into the error handling code.
         self.shutting_down = False
@@ -167,12 +150,10 @@ class Client(object):
 
         return self.receive_rpc(pool_id=pool_id, call_id=call_id, rq=rq)
 
-
-    def receive_rpc(self, pool_id, call_id, rq, data=None):
-
+    def receive_rpc(self, pool_id, call_id, rq):
         # If the field data is populated that means we should process from that
         # instead of the socket.
-        full_data = data
+        full_data = None
         # Total message length is going to be the first four bytes
         # (little-endian uint32)
         try:
@@ -196,7 +177,7 @@ class Client(object):
         pos += next_pos
         if header.call_id != call_id:
             # Receive an RPC with incorrect call_id, so call receive again to receive the next
-            # data on the socket.  Most likely, this means that
+            # data on the socket.  Likely, this means that that some caller abandoned their request
             return self.receive_rpc(pool_id, call_id, rq)
         elif header.exception.exception_class_name != '':
             # If we're in here it means a remote exception has happened.
@@ -223,7 +204,6 @@ class Client(object):
         # The rpc is fully built!
         return rpc
 
-
     # Receives exactly n bytes from the socket. Will block until n bytes are
     # received. If a socket is closed (RegionServer died) then raise an
     # exception that goes all the way back to the main client
@@ -246,9 +226,6 @@ class Client(object):
             sock.close()
         # We could still have greenlets waiting in the bad_call_id pools! Wake
         # them up so they can fail to error handling as well.
-        self.missed_rpcs_condition.acquire()
-        self.missed_rpcs_condition.notifyAll()
-        self.missed_rpcs_condition.release()
 
 
 # Creates a new RegionServer client. Creates the socket, initializes the
