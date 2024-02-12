@@ -26,7 +26,7 @@ from threading import current_thread, Condition, Lock
 from ..exceptions import (NoSuchColumnFamilyException, NotServingRegionException, PyBaseException,
                           RegionMovedException, RegionOpeningException, RegionServerException)
 from ..helpers import varint
-from ..pb.Client_pb2 import GetResponse, MutateResponse, ScanResponse
+from ..pb.Client_pb2 import GetResponse, MutateResponse, ScanResponse, MultiResponse
 from ..pb.RPC_pb2 import ConnectionHeader, RequestHeader, ResponseHeader
 
 logger = logging.getLogger(__name__)
@@ -40,7 +40,8 @@ decoder = varint.decodeVarint
 response_types = {
     b"Get": GetResponse,
     b"Mutate": MutateResponse,
-    b"Scan": ScanResponse
+    b"Scan": ScanResponse,
+    b"Multi": MultiResponse
 }
 
 
@@ -150,6 +151,23 @@ class Client(object):
             raise RegionServerException(region_client=self)
 
         return self.receive_rpc(pool_id=pool_id, call_id=call_id, rq=rq)
+    
+    def _parse_exception(exception_class, stack_trace, region_client):
+        if exception_class in ('org.apache.hadoop.hbase.regionserver.NoSuchColumnFamilyException',
+                               "java.io.IOException"):
+            return NoSuchColumnFamilyException()
+        elif exception_class == 'org.apache.hadoop.hbase.exceptions.RegionMovedException':
+            return RegionMovedException(region_client=region_client)
+        elif exception_class == 'org.apache.hadoop.hbase.NotServingRegionException':
+            return NotServingRegionException(region_client=region_client)
+        elif exception_class == \
+                'org.apache.hadoop.hbase.regionserver.RegionServerStoppedException':
+            return RegionServerException(region_client=region_client)
+        elif exception_class == 'org.apache.hadoop.hbase.exceptions.RegionOpeningException':
+            return RegionOpeningException(region_client=region_client)
+        else:
+            return PyBaseException(
+                exception_class + ". Remote traceback:\n%s" % stack_trace)
 
     def receive_rpc(self, pool_id, call_id, rq):
         # If the field data is populated that means we should process from that
@@ -183,22 +201,8 @@ class Client(object):
         elif header.exception.exception_class_name != '':
             # If we're in here it means a remote exception has happened.
             exception_class = header.exception.exception_class_name
-            if exception_class in \
-                    {'org.apache.hadoop.hbase.regionserver.NoSuchColumnFamilyException',
-                     "java.io.IOException"}:
-                raise NoSuchColumnFamilyException()
-            elif exception_class == 'org.apache.hadoop.hbase.exceptions.RegionMovedException':
-                raise RegionMovedException(region_client=self)
-            elif exception_class == 'org.apache.hadoop.hbase.NotServingRegionException':
-                raise NotServingRegionException(region_client=self)
-            elif exception_class == \
-                    'org.apache.hadoop.hbase.regionserver.RegionServerStoppedException':
-                raise RegionServerException(region_client=self)
-            elif exception_class == 'org.apache.hadoop.hbase.exceptions.RegionOpeningException':
-                raise RegionOpeningException(region_client=self)
-            else:
-                raise PyBaseException(
-                    exception_class + ". Remote traceback:\n%s" % header.exception.stack_trace)
+            if err := self._parse_exception(exception_class, header.exception.stack_trace, self):
+                raise err
         next_pos, pos = decoder(full_data, pos)
         rpc = response_types[rq.type]()
         rpc.ParseFromString(full_data[pos: pos + next_pos])

@@ -14,6 +14,7 @@
    limitations under the License.
 """
 from __future__ import absolute_import, print_function, unicode_literals
+from collections import defaultdict
 
 import logging
 from builtins import str
@@ -181,6 +182,46 @@ class MainClient(object):
             e._handle_exception(self, dest_region=dest_region)
             # Everything should be dandy now. Repeat the request!
             return self.get(table, key, families=families, filters=filters)
+    
+    def get_many(self, table, keys, families=None):
+        """
+        get row or specified cell with optional filter for all provided keys
+        :param table: hbase table
+        :param key: list of row key
+        :param families: (optional) specifies columns to get,
+          e.g., {"columnFamily1":["col1","col2"], "colFamily2": "col3"}
+        :return: tuple of (list of responses with cells, list of exceptions that occurred)
+        """
+        try:
+            if len(keys) == 0:
+                return []
+            # need a region client to originate the request
+            client = self._find_hosting_region(table, keys[0]).region_client
+
+            grouped_by_region = defaultdict(list)
+            for key in keys:
+                dest_region = self._find_hosting_region(table, key)
+                grouped_by_region[dest_region].append(key)
+
+            rq = request.multi_get(grouped_by_region, families)
+            response = client._send_request(rq)
+            results = []
+            errors = []
+            for ra_result in response.regionActionResult:
+                if ra_result.exception.name != "":
+                    errors.append(client._parse_exception(ra_result.exception.name,
+                                                          ra_result.exception.value))
+                else:
+                    for res_or_err in ra_result.regionActionResult:
+                        if res_or_err.exception.name != "":
+                            errors.append(client._parse_exception(res_or_err.exception.name,
+                                                                res_or_err.exception.value))
+                        else:
+                            results.append(Result(res_or_err.result))
+            return results, errors
+        except PyBaseException as e:
+            e._handle_exception(self, dest_region=dest_region)
+            return self.get_many(table, key, families=families)
 
     def put(self, table, key, values):
         return self._mutate(table, key, values, request.put_request)

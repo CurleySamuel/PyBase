@@ -4,7 +4,7 @@ from builtins import str
 
 from ..exceptions import MalformedFamilies, MalformedValues
 from ..filters import _to_filter
-from ..pb.Client_pb2 import Column, GetRequest, MutateRequest, MutationProto, ScanRequest
+from ..pb.Client_pb2 import Action, Column, GetRequest, MultiRequest, MutateRequest, MutationProto, RegionAction, ScanRequest
 
 # Table + Family used when requesting meta information from the
 # MetaRegionServer
@@ -42,6 +42,23 @@ def get_request(region, key, families, filters):
         rq.get.filter.CopyFrom(pbFilter)
     return Request(b"Get", rq)
 
+def region_action(region, keys, families):
+    ra = RegionAction()
+    ra.region.type = 1
+    ra.region.value = region.region_name
+    ra.atomic = False
+    for key in keys:
+        action = Action()
+        action.get.row = key
+        action.get.column.extend(families_to_columns(families))
+        ra.action.append(action)
+    return ra
+
+def multi_get(regions_and_keys, families):
+    rq = MultiRequest()
+    rq.regionAction.extend([region_action(region, keys, families)
+                            for region, keys in regions_and_keys.items()])
+    return Request(b"Multi", rq)
 
 def put_request(region, key, values):
     rq = MutateRequest()
