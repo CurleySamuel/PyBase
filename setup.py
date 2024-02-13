@@ -3,7 +3,7 @@ from __future__ import unicode_literals
 from setuptools import find_packages, setup
 
 setup(name='pybase',
-      version='4.0.0',
+      version='4.1.0',
       description='Native python client to hbase 1.0+',
       url='https://github.com/CurleySamuel/PyBase',
       author='Sam Curley',
