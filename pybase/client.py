@@ -217,7 +217,7 @@ class MainClient(object):
                             errors.append(client._parse_exception(res_or_err.exception.name,
                                                                 res_or_err.exception.value))
                         else:
-                            results.append(Result(res_or_err.result))
+                            results.append(Result(res_or_err))
             return results, errors
         except PyBaseException as e:
             e._handle_exception(self, dest_region=dest_region)
