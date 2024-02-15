@@ -212,7 +212,7 @@ class MainClient(object):
                     errors.append(client._parse_exception(ra_result.exception.name,
                                                           ra_result.exception.value))
                 else:
-                    for res_or_err in ra_result.regionActionResult:
+                    for res_or_err in ra_result.resultOrException:
                         if res_or_err.exception.name != "":
                             errors.append(client._parse_exception(res_or_err.exception.name,
                                                                 res_or_err.exception.value))
