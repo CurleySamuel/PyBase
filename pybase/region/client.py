@@ -152,19 +152,19 @@ class Client(object):
 
         return self.receive_rpc(pool_id=pool_id, call_id=call_id, rq=rq)
     
-    def _parse_exception(exception_class, stack_trace, region_client):
+    def _parse_exception(self, exception_class, stack_trace):
         if exception_class in ('org.apache.hadoop.hbase.regionserver.NoSuchColumnFamilyException',
                                "java.io.IOException"):
             return NoSuchColumnFamilyException()
         elif exception_class == 'org.apache.hadoop.hbase.exceptions.RegionMovedException':
-            return RegionMovedException(region_client=region_client)
+            return RegionMovedException(region_client=self)
         elif exception_class == 'org.apache.hadoop.hbase.NotServingRegionException':
-            return NotServingRegionException(region_client=region_client)
+            return NotServingRegionException(region_client=self)
         elif exception_class == \
                 'org.apache.hadoop.hbase.regionserver.RegionServerStoppedException':
-            return RegionServerException(region_client=region_client)
+            return RegionServerException(region_client=self)
         elif exception_class == 'org.apache.hadoop.hbase.exceptions.RegionOpeningException':
-            return RegionOpeningException(region_client=region_client)
+            return RegionOpeningException(region_client=self)
         else:
             return PyBaseException(
                 exception_class + ". Remote traceback:\n%s" % stack_trace)
@@ -201,7 +201,7 @@ class Client(object):
         elif header.exception.exception_class_name != '':
             # If we're in here it means a remote exception has happened.
             exception_class = header.exception.exception_class_name
-            if err := self._parse_exception(exception_class, header.exception.stack_trace, self):
+            if err := self._parse_exception(exception_class, header.exception.stack_trace):
                 raise err
         next_pos, pos = decoder(full_data, pos)
         rpc = response_types[rq.type]()
