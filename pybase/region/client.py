@@ -102,7 +102,7 @@ class Client(object):
     #   4. A varint representing the length of the serialized RPC.
     #   5. The serialized RPC.
     #
-    def _send_request(self, rq, lock_timeout=10):
+    def _send_request(self, rq, lock_timeout=10, _async=False):
         with acquire_timeout(self.call_lock, lock_timeout) as acquired:
             if acquired:
                 my_id = self.call_id
@@ -129,6 +129,8 @@ class Client(object):
 
         # send and receive the request
         future = self.thread_pool.submit(self.send_and_receive_rpc, my_id, rq, to_send)
+        if _async:
+            return future
         return future.result(timeout=self.thread_pool_timeout)
 
     # Sending an RPC, listens for the response and builds the correct pbResponse object.
@@ -184,7 +186,7 @@ class Client(object):
             # bytes specified. We don't want to overread or underread as that'll
             # cause havoc.
             full_data = Client._recv_n(self.sock_pool[pool_id], msg_length)
-        except socket.error:
+        except socket.error as e:
             raise RegionServerException(region_client=self)
         # Pass in the full data as well as your current position to the
         # decoder. It'll then return two variables:
@@ -244,7 +246,7 @@ def NewClient(host, port, pool_size, secondary=False, call_timeout=60):
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             s.connect((c.host, int(port)))
             _send_hello(s)
-            s.settimeout(2)
+            s.settimeout(call_timeout)
             c.sock_pool.append(s)
     except (socket.error, socket.timeout):
         return None

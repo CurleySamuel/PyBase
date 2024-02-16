@@ -18,6 +18,7 @@ from collections import defaultdict
 
 import logging
 from builtins import str
+from concurrent.futures import as_completed
 from itertools import chain
 from threading import Condition, Lock
 
@@ -42,7 +43,7 @@ logger = logging.getLogger(__name__)
 
 class MainClient(object):
 
-    def __init__(self, zkquorum, pool_size, secondary):
+    def __init__(self, zkquorum, pool_size, secondary, call_timeout=60):
         # Location of the ZooKeeper quorum (csv)
         self.zkquorum = zkquorum
         # Connection pool size per region server (and master!)
@@ -63,6 +64,8 @@ class MainClient(object):
         # Capture if this client is being used for secondary operations
         # We don't really care if it fails, best effort only.
         self.secondary = secondary
+        # How long to wait before a call times out
+        self.call_timeout = call_timeout
 
         self.zk_client = zk.connect(zkquorum)
 
@@ -192,36 +195,49 @@ class MainClient(object):
           e.g., {"columnFamily1":["col1","col2"], "colFamily2": "col3"}
         :return: tuple of (list of responses with cells, list of exceptions that occurred)
         """
+        if len(keys) == 0:
+            return []
+
+        grouped_by_server = defaultdict(lambda: defaultdict(list))
+        for key in keys:
+            dest_region = self._find_hosting_region(table, key)
+            # we must call each region server, which can server many key ranges
+            grouped_by_server[dest_region.region_client.host][dest_region].append(key)
+
+        results = []
+        errors = []
+        tasks = []
+        for grouped_by_region in grouped_by_server.values():
+            try:
+                dest_region = next(iter(grouped_by_region.keys()))
+                client = dest_region.region_client
+                rq = request.multi_get(grouped_by_region, families)
+                tasks.append(client._send_request(rq, _async=True))
+            except PyBaseException as e:
+                e._handle_exception(self, dest_region=dest_region)
+                errors.append(e)
+        
         try:
-            if len(keys) == 0:
-                return []
-            # need a region client to originate the request
-            client = self._find_hosting_region(table, keys[0]).region_client
-
-            grouped_by_region = defaultdict(list)
-            for key in keys:
-                dest_region = self._find_hosting_region(table, key)
-                grouped_by_region[dest_region].append(key)
-
-            rq = request.multi_get(grouped_by_region, families)
-            response = client._send_request(rq)
-            results = []
-            errors = []
-            for ra_result in response.regionActionResult:
-                if ra_result.exception.name != "":
-                    errors.append(client._parse_exception(ra_result.exception.name,
-                                                          ra_result.exception.value))
-                else:
-                    for res_or_err in ra_result.resultOrException:
-                        if res_or_err.exception.name != "":
-                            errors.append(client._parse_exception(res_or_err.exception.name,
-                                                                res_or_err.exception.value))
+            for f in as_completed(tasks, timeout=self.call_timeout * len(grouped_by_server)):
+                try:
+                    response = f.result()
+                    for ra_result in response.regionActionResult:
+                        if ra_result.exception.name != "":
+                            errors.append(client._parse_exception(ra_result.exception.name,
+                                                                ra_result.exception.value))
                         else:
-                            results.append(Result(res_or_err))
-            return results, errors
-        except PyBaseException as e:
-            e._handle_exception(self, dest_region=dest_region)
-            return self.get_many(table, key, families=families)
+                            for res_or_err in ra_result.resultOrException:
+                                if res_or_err.exception.name != "":
+                                    errors.append(client._parse_exception(res_or_err.exception.name,
+                                                                        res_or_err.exception.value))
+                                else:
+                                    results.append(Result(res_or_err))
+                except PyBaseException as e:
+                    e._handle_exception(self, dest_region=dest_region)
+                    errors.append(e)
+        except TimeoutError:
+            errors.append(e)
+        return results, errors
 
     def put(self, table, key, values):
         return self._mutate(table, key, values, request.put_request)
@@ -436,7 +452,8 @@ class MainClient(object):
             new_region.region_client = self.reverse_client_cache[server_loc]
         else:
             # Otherwise we need to create a new region client instance.
-            new_client = region.NewClient(host, port, self.pool_size, secondary=self.secondary)
+            new_client = region.NewClient(host, port, self.pool_size,
+                                          secondary=self.secondary, call_timeout=self.call_timeout)
             if new_client is None:
                 # Welp. We can't connect to the server that the Master
                 # supplied. Raise an exception.
@@ -458,8 +475,9 @@ class MainClient(object):
 
         try:
             # Try creating a new client instance and setting it as the new master_client.
-            self.master_client = region.NewClient(
-                ip, port, self.pool_size, secondary=self.secondary)
+            self.master_client = region.NewClient(ip, port, self.pool_size,
+                                                  secondary=self.secondary,
+                                                  call_timeout=self.call_timeout)
             logger.info("Updated master client to %s:%s", ip, port)
         except RegionServerException:
             raise MasterServerException(ip, port, secondary=self.secondary)
@@ -564,5 +582,5 @@ class Result(object):
 # location of ZooKeeper this function will ask ZK for the location of the
 # meta table and create the region client responsible for future meta
 # lookups (masterclient). Returns an instance of MainClient
-def NewClient(zkquorum, socket_pool_size=1, secondary=False):
-    return MainClient(zkquorum, socket_pool_size, secondary)
+def NewClient(zkquorum, socket_pool_size=1, secondary=False, call_timeout=60):
+    return MainClient(zkquorum, socket_pool_size, secondary, call_timeout=call_timeout)
