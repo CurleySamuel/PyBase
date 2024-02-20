@@ -13,21 +13,23 @@
    See the License for the specific language governing permissions and
    limitations under the License.
 """
-import socket
-from struct import pack, unpack
-from ..pb.RPC_pb2 import ConnectionHeader, RequestHeader, ResponseHeader
-from ..pb.Client_pb2 import GetResponse, MutateResponse, ScanResponse
-from ..helpers import varint
-from threading import Lock, Condition
-import logging
-from time import sleep
-from cStringIO import StringIO
-from ..exceptions import *
+from __future__ import absolute_import, print_function, unicode_literals
 
-logger = logging.getLogger('pybase.' + __name__)
-logger.setLevel(logging.DEBUG)
-# socket.setdefaulttimeout interfers with gevent.
-#socket.setdefaulttimeout(2)
+import logging
+import socket
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
+from io import BytesIO
+from struct import pack, unpack
+from threading import current_thread, Condition, Lock
+
+from ..exceptions import (NoSuchColumnFamilyException, NotServingRegionException, PyBaseException,
+                          RegionMovedException, RegionOpeningException, RegionServerException)
+from ..helpers import varint
+from ..pb.Client_pb2 import GetResponse, MutateResponse, ScanResponse, MultiResponse
+from ..pb.RPC_pb2 import ConnectionHeader, RequestHeader, ResponseHeader
+
+logger = logging.getLogger(__name__)
 
 # Used to encode and decode varints in a format protobuf expects.
 encoder = varint.encodeVarint
@@ -36,15 +38,26 @@ decoder = varint.decodeVarint
 # We need to know how to interpret an incoming proto.Message. This maps
 # the request_type to the response_type.
 response_types = {
-    "Get": GetResponse,
-    "Mutate": MutateResponse,
-    "Scan": ScanResponse
+    b"Get": GetResponse,
+    b"Mutate": MutateResponse,
+    b"Scan": ScanResponse,
+    b"Multi": MultiResponse
 }
+
+
+@contextmanager
+def acquire_timeout(lock, timeout):
+    result = lock.acquire(timeout=timeout)
+    try:
+        yield result
+    finally:
+        if result:
+            lock.release()
 
 
 # This Client is created once per RegionServer. Handles all communication
 # to and from this specific RegionServer.
-class Client:
+class Client(object):
     # Variables are as follows:
     #   - Host: The hostname of the RegionServer
     #   - Port: The port of the RegionServer
@@ -52,35 +65,19 @@ class Client:
     #   - call_id: A monotonically increasing int used as a sequence number for rpcs. This way
     #   we can match incoming responses with the rpc that made the request.
 
-    def __init__(self, host, port):
-        self.host = host
-        self.port = port
+    def __init__(self, host, port, secondary, call_timeout=60):
+        self.host = host.decode('utf8') if isinstance(host, bytes) else host
+        self.port = port.decode('utf8') if isinstance(port, bytes) else port
         self.pool_size = 0
-        # We support connection pools so have lists of sockets and read/write
-        # mutexes on them.
+
+        self.thread_pool = None
+        self.thread_pool_timeout = call_timeout
         self.sock_pool = []
-        self.write_lock_pool = []
-        self.read_lock_pool = []
+
         # Why yes, we do have a mutex protecting a single variable.
         self.call_lock = Lock()
         self.call_id = 0
-        # This dictionary and associated sync primitives are for when _receive_rpc
-        # receives an RPC that isn't theirs. If a thread gets one that isn't
-        # theirs it means there's another thread who also just sent an RPC. The
-        # other thread will also get the wrong call_id. So how do we make them
-        # switch RPCs?
-        #
-        # Receive an RPC with incorrect call_id?
-        #       1. Acquire lock
-        #       2. Place raw data into missed_rpcs with key call_id
-        #       3. Notify all other threads to wake up (nothing will happen until you release the lock)
-        #       4. WHILE: Your call_id is not in the dictionary
-        #               4.5  Call wait() on the conditional and get comfy.
-        #       5. Pop your data out
-        #       6. Release the lock
-        self.missed_rpcs = {}
-        self.missed_rpcs_lock = Lock()
-        self.missed_rpcs_condition = Condition(self.missed_rpcs_lock)
+
         # Set to true when .close is called - this allows threads/greenlets
         # stuck in _bad_call_id to escape into the error handling code.
         self.shutting_down = False
@@ -89,6 +86,10 @@ class Client:
         # region, we can close them all at the same time (saving us a significant
         # amount of meta lookups).
         self.regions = []
+
+        # Capture if this client is being used for secondary operations
+        # We don't really care if it fails, best effort only.
+        self.secondary = secondary
 
     # Sends an RPC over the wire then calls _receive_rpc and returns the
     # response RPC.
@@ -101,10 +102,14 @@ class Client:
     #   4. A varint representing the length of the serialized RPC.
     #   5. The serialized RPC.
     #
-    def _send_request(self, rq):
-        with self.call_lock:
-            my_id = self.call_id
-            self.call_id += 1
+    def _send_request(self, rq, lock_timeout=10, _async=False):
+        with acquire_timeout(self.call_lock, lock_timeout) as acquired:
+            if acquired:
+                my_id = self.call_id
+                self.call_id += 1
+            else:
+                logger.warning('Lock timeout %s RPC to %s:%s', rq.type, self.host, self.port)
+                raise RegionServerException(region_client=self)
         serialized_rpc = rq.pb.SerializeToString()
         header = RequestHeader()
         header.call_id = my_id
@@ -122,20 +127,13 @@ class Client:
         to_send = pack(">IB", total_length - 4, len(serialized_header))
         to_send += serialized_header + rpc_length_bytes + serialized_rpc
 
-        pool_id = my_id % self.pool_size
-        try:
-            with self.write_lock_pool[pool_id]:
-                logger.debug(
-                    'Sending %s RPC to %s:%s on pool port %s', rq.type, self.host, self.port, pool_id)
-                self.sock_pool[pool_id].send(to_send)
-        except socket.error:
-            # RegionServer dead?
-            raise RegionServerException(region_client=self)
-        # Message is sent! Now go listen for the results.
-        return self._receive_rpc(my_id, rq)
+        # send and receive the request
+        future = self.thread_pool.submit(self.send_and_receive_rpc, my_id, rq, to_send)
+        if _async:
+            return future
+        return future.result(timeout=self.thread_pool_timeout)
 
-    # Called after sending an RPC, listens for the response and builds the
-    # correct pbResponse object.
+    # Sending an RPC, listens for the response and builds the correct pbResponse object.
     #
     # The raw bytes we receive are composed (in order) -
     #
@@ -145,27 +143,51 @@ class Client:
     #   4. A varint representing the length of the serialized ResponseMessage.
     #   5. The ResponseMessage.
     #
-    def _receive_rpc(self, call_id, rq, data=None):
+    def send_and_receive_rpc(self, call_id, rq, to_send):
+        thread_name = current_thread().name
+        sp = thread_name.split("_") # i.e. splitting "ThreadPoolExecutor-1_0"
+        pool_id = int(sp[1]) # thread number is now responsible for only using its matching socket
+        try:
+            self.sock_pool[pool_id].send(to_send)
+        except socket.error:
+            raise RegionServerException(region_client=self)
+
+        return self.receive_rpc(pool_id=pool_id, call_id=call_id, rq=rq)
+    
+    def _parse_exception(self, exception_class, stack_trace):
+        if exception_class in ('org.apache.hadoop.hbase.regionserver.NoSuchColumnFamilyException',
+                               "java.io.IOException"):
+            return NoSuchColumnFamilyException()
+        elif exception_class == 'org.apache.hadoop.hbase.exceptions.RegionMovedException':
+            return RegionMovedException(region_client=self)
+        elif exception_class == 'org.apache.hadoop.hbase.NotServingRegionException':
+            return NotServingRegionException(region_client=self)
+        elif exception_class == \
+                'org.apache.hadoop.hbase.regionserver.RegionServerStoppedException':
+            return RegionServerException(region_client=self)
+        elif exception_class == 'org.apache.hadoop.hbase.exceptions.RegionOpeningException':
+            return RegionOpeningException(region_client=self)
+        else:
+            return PyBaseException(
+                exception_class + ". Remote traceback:\n%s" % stack_trace)
+
+    def receive_rpc(self, pool_id, call_id, rq):
         # If the field data is populated that means we should process from that
         # instead of the socket.
-        full_data = data
-        if data is None:
-            pool_id = call_id % self.pool_size
-            # Total message length is going to be the first four bytes
-            # (little-endian uint32)
-            with self.read_lock_pool[pool_id]:
-                try:
-                    msg_length = self._recv_n(self.sock_pool[pool_id], 4)
-                    if msg_length is None:
-                        raise
-                    msg_length = unpack(">I", msg_length)[0]
-                    # The message is then going to be however many bytes the first four
-                    # bytes specified. We don't want to overread or underread as that'll
-                    # cause havoc.
-                    full_data = self._recv_n(
-                        self.sock_pool[pool_id], msg_length)
-                except socket.error:
-                    raise RegionServerException(region_client=self)
+        full_data = None
+        # Total message length is going to be the first four bytes
+        # (little-endian uint32)
+        try:
+            msg_length = Client._recv_n(self.sock_pool[pool_id], 4)
+            if msg_length is None:
+                raise
+            msg_length = unpack(">I", msg_length)[0]
+            # The message is then going to be however many bytes the first four
+            # bytes specified. We don't want to overread or underread as that'll
+            # cause havoc.
+            full_data = Client._recv_n(self.sock_pool[pool_id], msg_length)
+        except socket.error as e:
+            raise RegionServerException(region_client=self)
         # Pass in the full data as well as your current position to the
         # decoder. It'll then return two variables:
         #       - next_pos: The number of bytes of data specified by the varint
@@ -175,58 +197,26 @@ class Client:
         header.ParseFromString(full_data[pos: pos + next_pos])
         pos += next_pos
         if header.call_id != call_id:
-            # call_ids don't match? Looks like a different thread nabbed our
-            # response.
-            return self._bad_call_id(call_id, rq, header.call_id, full_data)
-        elif header.exception.exception_class_name != u'':
+            # Receive an RPC with incorrect call_id, so call receive again to receive the next
+            # data on the socket.  Likely, this means that that some caller abandoned their request
+            return self.receive_rpc(pool_id, call_id, rq)
+        elif header.exception.exception_class_name != '':
             # If we're in here it means a remote exception has happened.
             exception_class = header.exception.exception_class_name
-            if exception_class == 'org.apache.hadoop.hbase.regionserver.NoSuchColumnFamilyException' or exception_class == "java.io.IOException":
-                raise NoSuchColumnFamilyException()
-            elif exception_class == 'org.apache.hadoop.hbase.exceptions.RegionMovedException':
-                raise RegionMovedException()
-            elif exception_class == 'org.apache.hadoop.hbase.NotServingRegionException':
-                raise NotServingRegionException()
-            elif exception_class == 'org.apache.hadoop.hbase.regionserver.RegionServerStoppedException':
-                raise RegionServerException(region_client=self)
-            elif exception_class == 'org.apache.hadoop.hbase.exceptions.RegionOpeningException':
-                raise RegionOpeningException()
-            else:
-                raise PyBaseException(
-                    exception_class + ". Remote traceback:\n%s" % header.exception.stack_trace)
+            if err := self._parse_exception(exception_class, header.exception.stack_trace):
+                raise err
         next_pos, pos = decoder(full_data, pos)
         rpc = response_types[rq.type]()
         rpc.ParseFromString(full_data[pos: pos + next_pos])
         # The rpc is fully built!
         return rpc
 
-    # Receive an RPC with incorrect call_id?
-    #       1. Acquire lock
-    #       2. Place raw data into missed_rpcs with key call_id
-    #       3. Notify all other threads to wake up (nothing will happen until you release the lock)
-    #       4. WHILE: Your call_id is not in the dictionary
-    #               4.5  Call wait() on the conditional and get comfy.
-    #       5. Pop your data out
-    #       6. Release the lock
-    def _bad_call_id(self, my_id, my_request, msg_id, data):
-        with self.missed_rpcs_lock:
-            logger.debug(
-                "Received invalid RPC ID. Got: %s, Expected: %s.", msg_id, my_id)
-            self.missed_rpcs[msg_id] = data
-            self.missed_rpcs_condition.notifyAll()
-            while my_id not in self.missed_rpcs:
-                if self.shutting_down:
-                    raise RegionServerException(region_client=self)
-                self.missed_rpcs_condition.wait()
-            new_data = self.missed_rpcs.pop(my_id)
-            logger.debug("Another thread found my RPC! RPC ID: %s", my_id)
-        return self._receive_rpc(my_id, my_request, data=new_data)
-
     # Receives exactly n bytes from the socket. Will block until n bytes are
     # received. If a socket is closed (RegionServer died) then raise an
     # exception that goes all the way back to the main client
-    def _recv_n(self, sock, n):
-        partial_str = StringIO()
+    @staticmethod
+    def _recv_n(sock, n):
+        partial_str = BytesIO()
         partial_len = 0
         while partial_len < n:
             packet = sock.recv(n - partial_len)
@@ -243,25 +233,21 @@ class Client:
             sock.close()
         # We could still have greenlets waiting in the bad_call_id pools! Wake
         # them up so they can fail to error handling as well.
-        self.missed_rpcs_condition.acquire()
-        self.missed_rpcs_condition.notifyAll()
-        self.missed_rpcs_condition.release()
 
 
 # Creates a new RegionServer client. Creates the socket, initializes the
 # connection and returns an instance of Client.
-def NewClient(host, port, pool_size):
-    c = Client(host, port)
+def NewClient(host, port, pool_size, secondary=False, call_timeout=60):
+    c = Client(host, port, secondary, call_timeout)
     try:
         c.pool_size = pool_size
+        c.thread_pool = ThreadPoolExecutor(pool_size)
         for x in range(pool_size):
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.connect((host, int(port)))
+            s.connect((c.host, int(port)))
             _send_hello(s)
-            s.settimeout(2)
+            s.settimeout(call_timeout)
             c.sock_pool.append(s)
-            c.read_lock_pool.append(Lock())
-            c.write_lock_pool.append(Lock())
     except (socket.error, socket.timeout):
         return None
     return c
@@ -278,7 +264,7 @@ def _send_hello(sock):
     #   1. "HBas\x00\x50". Magic prefix that HBase requires.
     #   2. Little-endian uint32 indicating length of serialized ConnectionHeader
     #   3. Serialized ConnectionHeader
-    message = "HBas\x00\x50" + pack(">I", len(serialized)) + serialized
+    message = b"HBas\x00\x50" + pack(">I", len(serialized)) + serialized
     sock.send(message)
 
 
@@ -287,5 +273,4 @@ def _send_hello(sock):
 def _to_varint(val):
     temp = []
     encoder(temp.append, val)
-    return "".join(temp)
-
+    return b"".join(temp)

@@ -13,26 +13,37 @@
    See the License for the specific language governing permissions and
    limitations under the License.
 """
-import zk.client as zk
-import region.client as region
-from region.region import region_from_cell
-from request import request
+from __future__ import absolute_import, print_function, unicode_literals
+from collections import defaultdict
+
 import logging
-import logging.config
-from intervaltree import IntervalTree
-from threading import Lock
-from time import sleep
+from builtins import str
+from concurrent.futures import as_completed
 from itertools import chain
-from filters import _to_filter
-from exceptions import *
+from threading import Condition, Lock
 
-# Using a tiered logger such that all submodules propagate through to this
-# logger. Changing the logging level here should affect all other modules.
-logger = logging.getLogger('pybase')
+import pybase.region.client as region
+import pybase.zk.client as zk
+from intervaltree import IntervalTree
 
-class MainClient:
+from .exceptions import (
+    MasterServerException,
+    NoSuchTableException,
+    PyBaseException,
+    RegionException,
+    RegionServerException,
+    ZookeeperException
+)
+from .filters import _to_filter
+from .region.region import region_from_cell
+from .request import request
 
-    def __init__(self, zkquorum, pool_size):
+logger = logging.getLogger(__name__)
+
+
+class MainClient(object):
+
+    def __init__(self, zkquorum, pool_size, secondary, call_timeout=60):
         # Location of the ZooKeeper quorum (csv)
         self.zkquorum = zkquorum
         # Connection pool size per region server (and master!)
@@ -50,6 +61,38 @@ class MainClient:
         # Mutex used so only one thread can request meta information from
         # the master at a time.
         self._master_lookup_lock = Lock()
+        # Capture if this client is being used for secondary operations
+        # We don't really care if it fails, best effort only.
+        self.secondary = secondary
+        # How long to wait before a call times out
+        self.call_timeout = call_timeout
+
+        self.zk_client = zk.connect(zkquorum)
+
+        wait_for_master = Condition()
+        wait_for_master.acquire()
+
+        # register a callback handler when master znode data changes
+        @self.zk_client.DataWatch(zk.master_znode)
+        def _update_master_info(data, stat):
+            initial = self.master_client is None
+            if data:
+                with self._master_lookup_lock:
+                    self.update_master_client(*zk.parse_master_info(data))
+
+                    if initial:
+                        wait_for_master.acquire()
+                        wait_for_master.notify_all()
+                        wait_for_master.release()
+
+        wait_time = 0.0
+        # wait up to 10s
+        while self.master_client is None and wait_time < 10.0:
+            wait_for_master.wait(1.0)
+            wait_time += 1.0
+
+        if self.master_client is None:
+            raise ZookeeperException("Timed out waiting for master server watch to fire")
 
     """
         HERE LAY CACHE OPERATIONS
@@ -57,15 +100,15 @@ class MainClient:
 
     def _add_to_region_cache(self, new_region):
         stop_key = new_region.stop_key
-        if stop_key == '':
+        if stop_key == b'':
             # This is hacky but our interval tree requires hard interval stops.
             # So what's the largest char out there? chr(255) -> '\xff'. If
             # you're using '\xff' as a prefix for your rows then this'll cause
             # a cache miss on every request.
-            stop_key = '\xff'
+            stop_key = b'\xff'
         # Keys are formatted like: 'tablename,key'
-        start_key = new_region.table + ',' + new_region.start_key
-        stop_key = new_region.table + ',' + stop_key
+        start_key = new_region.table + b',' + new_region.start_key
+        stop_key = new_region.table + b',' + stop_key
 
         # Only let one person touch the cache at once.
         with self._cache_lock:
@@ -101,7 +144,7 @@ class MainClient:
     def _delete_from_region_cache(self, table, start_key):
         # Don't acquire the lock because the calling function should have done
         # so already
-        self.region_cache.remove_overlap(table + "," + start_key)
+        self.region_cache.remove_overlap(table + b"," + start_key)
 
     """
         HERE LAY REQUESTS
@@ -142,6 +185,59 @@ class MainClient:
             e._handle_exception(self, dest_region=dest_region)
             # Everything should be dandy now. Repeat the request!
             return self.get(table, key, families=families, filters=filters)
+    
+    def get_many(self, table, keys, families=None):
+        """
+        get row or specified cell with optional filter for all provided keys
+        :param table: hbase table
+        :param key: list of row key
+        :param families: (optional) specifies columns to get,
+          e.g., {"columnFamily1":["col1","col2"], "colFamily2": "col3"}
+        :return: tuple of (list of responses with cells, list of exceptions that occurred)
+        """
+        if len(keys) == 0:
+            return []
+
+        grouped_by_server = defaultdict(lambda: defaultdict(list))
+        for key in keys:
+            dest_region = self._find_hosting_region(table, key)
+            # we must call each region server, which can server many key ranges
+            grouped_by_server[dest_region.region_client.host][dest_region].append(key)
+
+        results = []
+        errors = []
+        tasks = []
+        for grouped_by_region in grouped_by_server.values():
+            try:
+                dest_region = next(iter(grouped_by_region.keys()))
+                client = dest_region.region_client
+                rq = request.multi_get(grouped_by_region, families)
+                tasks.append(client._send_request(rq, _async=True))
+            except PyBaseException as e:
+                e._handle_exception(self, dest_region=dest_region)
+                errors.append(e)
+        
+        try:
+            for f in as_completed(tasks, timeout=self.call_timeout * len(grouped_by_server)):
+                try:
+                    response = f.result()
+                    for ra_result in response.regionActionResult:
+                        if ra_result.exception.name != "":
+                            errors.append(client._parse_exception(ra_result.exception.name,
+                                                                ra_result.exception.value))
+                        else:
+                            for res_or_err in ra_result.resultOrException:
+                                if res_or_err.exception.name != "":
+                                    errors.append(client._parse_exception(res_or_err.exception.name,
+                                                                        res_or_err.exception.value))
+                                else:
+                                    results.append(Result(res_or_err))
+                except PyBaseException as e:
+                    e._handle_exception(self, dest_region=dest_region)
+                    errors.append(e)
+        except TimeoutError:
+            errors.append(e)
+        return results, errors
 
     def put(self, table, key, values):
         return self._mutate(table, key, values, request.put_request)
@@ -206,13 +302,15 @@ class MainClient:
                 # or merged so this recursive call may be scanning multiple regions or only half
                 # of one region).
                 result_set._append_response(self.scan(
-                    table, start_key=previous_stop_key, stop_key=cur_region.stop_key, families=families, filters=filters))
+                    table, start_key=previous_stop_key, stop_key=cur_region.stop_key,
+                    families=families, filters=filters))
                 # We continue here because we don't want to append the
                 # first_response results to the result_set. When we did the
                 # recursive scan it rescanned whatever the first_response
                 # initially contained. Appending both will produce duplicates.
                 previous_stop_key = cur_region.stop_key
-                if previous_stop_key == '' or (stop_key is not None and previous_stop_key > stop_key):
+                if previous_stop_key == b'' or \
+                        (stop_key is not None and previous_stop_key > stop_key):
                     break
                 continue
             # Both calls succeeded! Append the results to the result_set.
@@ -223,11 +321,12 @@ class MainClient:
             previous_stop_key = cur_region.stop_key
             # Stopping criteria. This region is either the end ('') or the end of this region is
             # beyond the specific stop_key.
-            if previous_stop_key == '' or (stop_key is not None and previous_stop_key > stop_key):
+            if previous_stop_key == b'' or (stop_key is not None and previous_stop_key > stop_key):
                 break
         return result_set
 
-    def _scan_hit_region_once(self, previous_stop_key, table, start_key, stop_key, families, filters):
+    def _scan_hit_region_once(self, previous_stop_key, table, start_key, stop_key, families,
+                              filters):
         try:
             # Lookup the next region to scan by searching for the
             # previous_stop_key (region keys are inclusive on the start and
@@ -235,10 +334,11 @@ class MainClient:
             cur_region = self._find_hosting_region(
                 table, previous_stop_key)
         except PyBaseException as e:
-            # This means that either Master is down or something's funky with the META region. Try handling it
-            # and recursively perform the same call again.
+            # This means that either Master is down or something's funky with the META region.
+            # Try handling it and recursively perform the same call again.
             e._handle_exception(self)
-            return self._scan_hit_region_once(previous_stop_key, table, start_key, stop_key, families, filters)
+            return self._scan_hit_region_once(previous_stop_key, table, start_key, stop_key,
+                                              families, filters)
         # Create the scan request object. The last two values are 'Close' and
         # 'Scanner_ID' respectively.
         rq = request.scan_request(
@@ -250,7 +350,8 @@ class MainClient:
             # Uh oh. Probably a region/region server issue. Handle it and try
             # again.
             e._handle_exception(self, dest_region=cur_region)
-            return self._scan_hit_region_once(previous_stop_key, table, start_key, stop_key, families, filters)
+            return self._scan_hit_region_once(previous_stop_key, table, start_key, stop_key,
+                                              families, filters)
         return response, cur_region
 
     def _scan_region_while_more_results(self, cur_region, response):
@@ -273,7 +374,7 @@ class MainClient:
         # Now close the scanner.
         rq = request.scan_request(
             cur_region, None, None, None, None, True, scanner_id)
-        _ = cur_region.region_client._send_request(rq)
+        cur_region.region_client._send_request(rq)
         # Close it and return the results!
         return response_set
 
@@ -301,8 +402,7 @@ class MainClient:
                 dest_region = self._get_from_region_cache(table, key)
                 if dest_region is None:
                     # Nope, still not in the cache.
-                    logger.debug(
-                        'Region cache miss! Table: %s, Key: %s', table, key)
+                    logger.debug('Region cache miss! Table: %s, Key: %s', table, key)
                     # Ask master for region information.
                     dest_region = self._discover_region(table, key)
         return dest_region
@@ -318,9 +418,9 @@ class MainClient:
         except (AttributeError, RegionServerException, RegionException):
             if self.master_client is None:
                 # I don't know why this can happen but it does.
-                raise MasterServerException(None, None)
+                raise MasterServerException(None, None, secondary=self.secondary)
             raise MasterServerException(
-                self.master_client.host, self.master_client.port)
+                self.master_client.host, self.master_client.port, secondary=self.secondary)
         # Master gave us a response. We need to run and parse the response,
         # then do all necessary work for entering it into our structures.
         return self._create_new_region(response, table)
@@ -331,31 +431,33 @@ class MainClient:
         # table doesn't exist!
         if len(cells) == 0:
             raise NoSuchTableException("Table does not exist.")
+        server_loc = None
         # We get ~4 cells back each holding different information. We only care
         # about two of them.
         for cell in cells:
-            if cell.qualifier == "regioninfo":
+            if cell.qualifier == b"regioninfo":
                 # Take the regioninfo information and parse it into our own
                 # Region representation.
                 new_region = region_from_cell(cell)
-            elif cell.qualifier == "server":
+            elif cell.qualifier == b"server":
                 # Grab the host, port of the Region Server that this region is
                 # hosted on.
                 server_loc = cell.value
-                host, port = cell.value.split(':')
+                host, port = cell.value.split(b':')
             else:
                 continue
         # Do we have an existing client for this region server already?
-        if server_loc in self.reverse_client_cache:
+        if server_loc and server_loc in self.reverse_client_cache:
             # If so, grab it!
             new_region.region_client = self.reverse_client_cache[server_loc]
         else:
             # Otherwise we need to create a new region client instance.
-            new_client = region.NewClient(host, port, self.pool_size)
+            new_client = region.NewClient(host, port, self.pool_size,
+                                          secondary=self.secondary, call_timeout=self.call_timeout)
             if new_client is None:
                 # Welp. We can't connect to the server that the Master
                 # supplied. Raise an exception.
-                raise RegionServerException(host=host, port=port)
+                raise RegionServerException(host=host, port=port, secondary=self.secondary)
             logger.info("Created new Client for RegionServer %s", server_loc)
             # Add it to the host,port -> instance of region client map.
             self.reverse_client_cache[server_loc] = new_client
@@ -367,20 +469,18 @@ class MainClient:
         logger.info("Successfully discovered new region %s", new_region)
         return new_region
 
-    def _recreate_master_client(self):
-        if self.master_client is not None:
-            # yep, still no idea why self.master_client can be set to None.
+    def update_master_client(self, ip, port):
+        if self.master_client:
             self.master_client.close()
-        # Ask ZooKeeper for the location of the Master.
-        ip, port = zk.LocateMaster(self.zkquorum)
+
         try:
-            # Try creating a new client instance and setting it as the new
-            # master_client.
-            self.master_client = region.NewClient(ip, port, self.pool_size)
+            # Try creating a new client instance and setting it as the new master_client.
+            self.master_client = region.NewClient(ip, port, self.pool_size,
+                                                  secondary=self.secondary,
+                                                  call_timeout=self.call_timeout)
+            logger.info("Updated master client to %s:%s", ip, port)
         except RegionServerException:
-            # We can't connect to the address that ZK supplied. Raise an
-            # exception.
-            raise MasterServerException(ip, port)
+            raise MasterServerException(ip, port, secondary=self.secondary)
 
     """
         HERE LAY THE MISCELLANEOUS
@@ -402,7 +502,7 @@ class MainClient:
             for reg in region_client.regions:
                 self._delete_from_region_cache(reg.table, reg.start_key)
             self.reverse_client_cache.pop(
-                region_client.host + ":" + region_client.port, None)
+                region_client.host + b":" + region_client.port, None)
             region_client.close()
 
     def _purge_region(self, reg):
@@ -416,7 +516,11 @@ class MainClient:
                 pass
 
     def _construct_meta_key(self, table, key):
-        return table + "," + key + ",:"
+        if isinstance(table, str):
+            table = table.encode('utf8')
+        if isinstance(key, str):
+            key = key.encode('utf8')
+        return table + b',' + key + b',:'
 
     def close(self):
         logger.info("Main client received close request.")
@@ -431,7 +535,7 @@ class MainClient:
         self.reverse_client_cache = {}
 
 
-class Result:
+class Result(object):
 
     # Called like Result(my_response), takes all the wanted data from
     # my_response and puts it into our own result structure.
@@ -468,7 +572,7 @@ class Result:
         try:
             self.cells.extend([result.cell for result in rsp.results])
             self.stale = self.stale or rsp.stale
-        except AttributeError as e:
+        except AttributeError:
             # This is a single result object we're merging instead.
             self.cells.extend(rsp.cells)
             self.stale = self.stale or rsp.stale
@@ -478,10 +582,5 @@ class Result:
 # location of ZooKeeper this function will ask ZK for the location of the
 # meta table and create the region client responsible for future meta
 # lookups (masterclient). Returns an instance of MainClient
-def NewClient(zkquorum, socket_pool_size=1):
-    # Create the main client.
-    a = MainClient(zkquorum, socket_pool_size)
-    # Create the master client.
-    a._recreate_master_client()
-    return a
-
+def NewClient(zkquorum, socket_pool_size=1, secondary=False, call_timeout=60):
+    return MainClient(zkquorum, socket_pool_size, secondary, call_timeout=call_timeout)

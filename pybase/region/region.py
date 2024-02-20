@@ -13,11 +13,14 @@
    See the License for the specific language governing permissions and
    limitations under the License.
 """
+from __future__ import absolute_import, print_function, unicode_literals
+
 from struct import unpack
+
 from ..pb.HBase_pb2 import RegionInfo as pbRegionInfo
 
 
-class Region:
+class Region(object):
 
     def __init__(self, table, name, start, stop):
         self.table = table
@@ -42,7 +45,8 @@ def region_from_cell(cell):
     if magic != 1346524486:
         # Either it's a corrupt message or an unsupported region info version.
         raise RuntimeError(
-            "HBase returned an invalid response (are you running a version of HBase supporting Protobufs?)")
+            "HBase returned an invalid response (are you running a version of HBase supporting "
+            "Protobufs?)")
     region_info = pbRegionInfo()
     region_info.ParseFromString(cell.value[4:-4])
     table = region_info.table_name.qualifier
@@ -50,4 +54,3 @@ def region_from_cell(cell):
     start_key = region_info.start_key
     stop_key = region_info.end_key
     return Region(table, region_name, start_key, stop_key)
-

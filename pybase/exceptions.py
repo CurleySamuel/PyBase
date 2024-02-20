@@ -13,13 +13,17 @@
    See the License for the specific language governing permissions and
    limitations under the License.
 """
+from __future__ import absolute_import, print_function, unicode_literals
+
 import logging
-from time import sleep
-from threading import Condition, Lock, RLock, Semaphore
-from time import time
 from collections import defaultdict
-logger = logging.getLogger('pybase.' + __name__)
-logger.setLevel(logging.DEBUG)
+from functools import reduce
+from threading import Lock, Semaphore
+from time import sleep, time
+
+from builtins import str
+
+logger = logging.getLogger(__name__)
 
 
 # All PyBase exceptions inherit from me. Assumes unrecoverable.
@@ -30,7 +34,7 @@ class PyBaseException(Exception):
     # unrecoverable and thus the _handle method
     # just reraises the exception.
     def _handle_exception(self, main_client, **kwargs):
-        raise self.__class__(self.message)
+        raise self.__class__(str(self))
 
 
 # Parent of any exceptions involving Zookeeper
@@ -61,18 +65,24 @@ class ZookeeperResponseException(ZookeeperException):
 # Means an RS is dead or unreachable.
 class RegionServerException(PyBaseException):
 
-    def __init__(self, host=None, port=None, region_client=None):
-        self.host = host
-        self.port = port
+    def __init__(self, host=None, port=None, region_client=None, secondary=False):
+        self.host = host.encode('utf8') if isinstance(host, str) else host
+        self.port = port.encode('utf8') if isinstance(port, str) else port
         self.region_client = region_client
+        self.secondary = secondary
 
     def _handle_exception(self, main_client, **kwargs):
         # region_client not set? Then host/port must have been. Fetch the
         # client given the host, port
         if self.region_client is None:
-            concat = self.host + ":" + self.port
+            concat = self.host + b":" + self.port
             self.region_client = main_client.reverse_client_cache.get(
                 concat, None)
+
+        # we don't care about secondaries, move on
+        if (self.region_client and self.region_client.secondary) or self.secondary:
+            _let_all_through(self, self.region_client)
+
         # Let one greenlet through per region_client (returns True otherwise
         # blocks and eventually returns False)
         if _let_one_through(self, self.region_client):
@@ -84,12 +94,15 @@ class RegionServerException(PyBaseException):
                     if loc in main_client.reverse_client_cache:
                         # We're the first in and it's our job to kill the client.
                         # Purge it.
-                        logger.warn("Region server %s:%s refusing connections. Purging cache, sleeping, retrying.",
-                                    self.region_client.host, self.region_client.port)
+                        logger.warning(
+                            "Region server %s:%s refusing connections. "
+                            "Purging cache, sleeping, retrying.",
+                            self.region_client.host, self.region_client.port
+                        )
                         main_client._purge_client(self.region_client)
                         # Sleep for an arbitrary amount of time. If this returns
                         # False then we've hit our max retry threshold. Die.
-                        key = self.region_client.host + ':' + self.region_client.port
+                        key = self.region_client.host + ":" + self.region_client.port
                         if not _dynamic_sleep(self, key):
                             raise self
             finally:
@@ -106,18 +119,27 @@ class RegionServerStoppedException(RegionServerException):
 # All Master exceptions inherit from me
 class MasterServerException(PyBaseException):
 
-    def __init__(self, host, port):
-        self.host = host
-        self.port = port
+    def __init__(self, host, port, secondary=False):
+        self.host = host.encode('utf8') if isinstance(host, str) else host
+        self.port = port.encode('utf8') if isinstance(port, str) else port
+        self.secondary = secondary
 
     def _handle_exception(self, main_client, **kwargs):
+        # we don't care about secondaries, move on
+        if self.secondary:
+            _let_all_through(self, None)
+
         # Let one greenlet through. Others block and eventually return False.
         if _let_one_through(self, None):
             try:
                 # Makes sure someone else hasn't already fixed the issue.
-                if main_client.master_client is None or (self.host == main_client.master_client.host and self.port == main_client.master_client.port):
-                    logger.warn(
-                        "Encountered an exception with the Master server. Sleeping then reestablishing.")
+                if main_client.master_client is None or \
+                        (self.host == main_client.master_client.host
+                         and self.port == main_client.master_client.port):
+                    logger.warning(
+                        "Encountered an exception with the Master server. "
+                        "Sleeping then reestablishing."
+                    )
                     if not _dynamic_sleep(self, None):
                         raise self
                     main_client._recreate_master_client()
@@ -127,20 +149,24 @@ class MasterServerException(PyBaseException):
 
 # Master gave us funky data. Unrecoverable.
 class MasterMalformedResponseException(MasterServerException):
-    def __init__(self, host, port):
-        self.host = host
-        self.port = port
-
     def _handle_exception(self, main_client, **kwargs):
-        raise self.__class__(self.message)
+        raise self.__class__(str(self))
 
 
 # All region exceptions inherit from me.
 class RegionException(PyBaseException):
 
+    def __init__(self, region_client=None):
+        self.region_client = region_client
+
     def _handle_exception(self, main_client, **kwargs):
         if "dest_region" in kwargs:
             rg_n = kwargs["dest_region"].region_name
+
+            # we don't care about secondaries, move on
+            if self.region_client and self.region_client.secondary:
+                _let_all_through(self, rg_n)
+
             if _let_one_through(self, rg_n):
                 try:
                     main_client._purge_region(kwargs["dest_region"])
@@ -165,6 +191,10 @@ class NotServingRegionException(RegionException):
 class RegionOpeningException(RegionException):
 
     def _handle_exception(self, main_client, **kwargs):
+        # we don't care about secondaries, move on
+        if self.region_client and self.region_client.secondary:
+            raise self
+
         if "dest_region" in kwargs:
             rg_n = kwargs["dest_region"].region_name
             # There's nothing to handle here. We just need to give the region
@@ -268,8 +298,10 @@ def _let_all_through(exception, data):
 
 
 # We want to sleep more and more with every exception retry.
-def sleep_formula(x): return (x / 1.5)**2
-# [0.0, 0.44, 1.77, 4.0, 7.11, 11.11, 16.0, 21.77, 28.44, 36.0]
+def sleep_formula(x):
+    # [0.0, 0.44, 1.77, 4.0, 7.11, 11.11, 16.0, 21.77, 28.44, 36.0]
+    return (x / 1.5)**2
+
 
 _exception_count = defaultdict(lambda: (0, time()))
 _max_retries = 7

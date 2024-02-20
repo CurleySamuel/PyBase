@@ -1,9 +1,12 @@
+from __future__ import absolute_import, print_function, unicode_literals
+
 import unittest
-import pybase
 from collections import defaultdict
 from time import sleep
-from pybase.exceptions import *
 
+import pybase
+from pybase.exceptions import (MalformedValues, NoSuchColumnFamilyException,
+                               NoSuchTableException, ZookeeperException)
 
 # Please note that all below unit tests require the existence of a table
 # to play with. Table must contain two column families specified below as well.
@@ -22,11 +25,8 @@ class TestClient(unittest.TestCase):
         self.assertIsNotNone(c.master_client.host)
 
     def test_new_client_bad(self):
-        try:
-            c = pybase.NewClient("badzkquorum")
-            self.assertEqual(1, 0)
-        except ZookeeperException:
-            pass
+        with self.assertRaises(ZookeeperException):
+            pybase.NewClient("badzkquorum")
 
     def test_client_close(self):
         c = pybase.NewClient(zkquorum)
@@ -80,11 +80,8 @@ class TestGet(unittest.TestCase):
         self.assertNotIn(cf2, resd.keys())
 
     def test_get_bad_table(self):
-        try:
-            res = self.c.get("asdasdasd", "plsfail")
-            self.assertEqual(1, 0)
-        except NoSuchTableException:
-            pass
+        with self.assertRaises(NoSuchTableException):
+            self.c.get("asdasdasd", "plsfail")
 
     def test_get_bad_row(self):
         res = self.c.get(table, "plsfail")
@@ -112,11 +109,8 @@ class TestGet(unittest.TestCase):
 
     def test_get_with_bad_filter(self):
         ft = "badfilter"
-        try:
-            res = self.c.get(table, self.row_prefix, filters=ft)
-            self.assertEqual(1, 0)
-        except ValueError:
-            pass
+        with self.assertRaises(ValueError):
+            self.c.get(table, self.row_prefix, filters=ft)
 
 
 class TestPut(unittest.TestCase):
@@ -214,17 +208,14 @@ class TestScan(unittest.TestCase):
 
     def test_scan_with_range(self):
         rsp = self.c.scan(
-            table, start_key=self.row_prefix + "0", stop_key=self.row_prefix + "50", filters=self.pFilter)
+            table, start_key=self.row_prefix + "0", stop_key=self.row_prefix + "50",
+            filters=self.pFilter)
         # It's not 100 because rows are compared lexicographically.
         self.assertEqual(len(rsp.flatten_cells()), 92)
 
     def test_scan_with_bad_range(self):
-        try:
-            rsp = self.c.scan(
-                table, start_key="hmm", stop_key=24, filters=self.pFilter)
-            self.assertEqual(1, 0)
-        except TypeError:
-            pass
+        with self.assertRaises(TypeError):
+            self.c.scan(table, start_key="hmm", stop_key=24, filters=self.pFilter)
 
     def test_scan_with_families(self):
         fam = {cf1: ["oberyn"]}
@@ -233,11 +224,8 @@ class TestScan(unittest.TestCase):
 
     def test_scan_with_bad_column_family(self):
         fam = {"hodor": ["stillhodor"]}
-        try:
-            rsp = self.c.scan(table, filters=self.pFilter, families=fam)
-            self.assertEqual(1, 0)
-        except NoSuchColumnFamilyException:
-            pass
+        with self.assertRaises(NoSuchColumnFamilyException):
+            self.c.scan(table, filters=self.pFilter, families=fam)
 
     def test_scan_with_bad_column_qualifier(self):
         fam = {cf1: ["badqual"], cf2: ["one"]}
@@ -314,11 +302,8 @@ class TestDelete(unittest.TestCase):
                 "i am hodor": ""
             }
         }
-        try:
-            rsp = self.c.delete(table, self.row_prefix + "2", value)
-            self.assertEqual(0, 1)
-        except NoSuchColumnFamilyException:
-            pass
+        with self.assertRaises(NoSuchColumnFamilyException):
+            self.c.delete(table, self.row_prefix + "2", value)
 
     def test_delete_bad_column_qualifier(self):
         value = {
@@ -396,11 +381,8 @@ class TestAppend(unittest.TestCase):
                 "oberyn": "is the",
             }
         }
-        try:
-            rsp = self.c.append(table, self.row_prefix + "3", values)
-            self.assertEqual(1, 0)
-        except NoSuchColumnFamilyException:
-            pass
+        with self.assertRaises(NoSuchColumnFamilyException):
+            self.c.append(table, self.row_prefix + "3", values)
 
     def test_append_bad_column_qualifier(self):
         values = {
@@ -529,11 +511,8 @@ class TestIncrement(unittest.TestCase):
         }
         # TODO: Throwing RuntimeError: java.io.IOException when it should be throwing
         #       column family exception.
-        try:
-            rsp = self.c.increment(table, self.row_prefix + "2", new_values)
-            self.assertEqual(1, 0)
-        except NoSuchColumnFamilyException:
-            pass
+        with self.assertRaises(NoSuchColumnFamilyException):
+            self.c.increment(table, self.row_prefix + "2", new_values)
 
     def test_increment_new_column_qualifier(self):
         new_values = {

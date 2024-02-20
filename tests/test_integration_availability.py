@@ -1,9 +1,11 @@
-import unittest
-import pybase
-from collections import defaultdict
-from pybase.exceptions import *
-import subprocess
+from __future__ import absolute_import, print_function, unicode_literals
+
 import os
+import subprocess
+import unittest
+
+import pybase
+from pybase.exceptions import ZookeeperException
 
 # Please note that all below unit tests require the existence of a table
 # to play with. Table must contain two column families specified below as well.
@@ -12,6 +14,7 @@ table = "test"
 zkquorum = "localhost"
 cf1 = "cf1"
 cf2 = "cf2"
+
 
 class TestAvailability(unittest.TestCase):
 
@@ -98,25 +101,24 @@ class TestAvailability(unittest.TestCase):
         pass
 
 
-
 # Currently no admin functionality. Have to go through the hbase shell to
 # do things like moving regions, rebalancing, etc.
 def hbase_shell(cmd):
     echo = subprocess.Popen(
         ('echo', '"' + cmd + ';exit"'), stdout=subprocess.PIPE)
-    output = subprocess.check_output(('hbase', 'shell'), stdin=echo.stdout)
+    subprocess.check_output(('hbase', 'shell'), stdin=echo.stdout)
     echo.wait()
 
 
 def start_region_servers(server_ids):
-    print ""
+    print("")
     a = [os.environ['HBASE_HOME'] + "/bin/local-regionservers.sh",
          "start", ' '.join(server_ids)]
     subprocess.call(a)
 
 
 def stop_region_servers(server_ids):
-    print ""
+    print("")
     a = [os.environ['HBASE_HOME'] + "/bin/local-regionservers.sh",
          "stop", ' '.join(server_ids)]
     subprocess.call(a)
